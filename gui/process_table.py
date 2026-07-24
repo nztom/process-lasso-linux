@@ -50,6 +50,7 @@ class ProcessTable(QTableWidget):
         hdr = self.horizontalHeader()
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionsClickable(True)
+        hdr.setSectionsMovable(True)
         hdr.sectionClicked.connect(self._on_header_click)
         hdr.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         hdr.customContextMenuRequested.connect(self._show_header_menu)
@@ -64,11 +65,24 @@ class ProcessTable(QTableWidget):
             action.setCheckable(True)
             action.setChecked(not hdr.isSectionHidden(i))
             action.setData(i)
+        menu.addSeparator()
+        reset_action = menu.addAction("Reset columns to default")
         chosen = menu.exec(hdr.mapToGlobal(pos))
-        if chosen:
+        if chosen == reset_action:
+            self._reset_column_layout()
+        elif chosen:
             col = chosen.data()
             hidden = hdr.isSectionHidden(col)
             hdr.setSectionHidden(col, not hidden)
+
+    def _reset_column_layout(self):
+        """Restore default column order and visibility."""
+        hdr = self.horizontalHeader()
+        for logical_index in range(len(self.COLUMNS)):
+            current_visual_index = hdr.visualIndex(logical_index)
+            if current_visual_index != logical_index:
+                hdr.moveSection(current_visual_index, logical_index)
+            hdr.setSectionHidden(logical_index, logical_index == self.COMMAND_COLUMN)
 
     def _update_header_labels(self):
         """Re-set header labels (called after sort to add/remove arrow indicators)."""

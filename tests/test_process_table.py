@@ -43,6 +43,29 @@ class ProcessTableTests(unittest.TestCase):
 
         self.assertEqual(table.item(0, table.COMMAND_COLUMN).text(), command)
 
+    def test_columns_are_movable(self):
+        table = ProcessTable(None, None)
+        self.assertTrue(table.horizontalHeader().sectionsMovable())
+
+    def test_reset_restores_default_order_and_visibility(self):
+        table = ProcessTable(None, None)
+        header = table.horizontalHeader()
+        header.moveSection(header.visualIndex(2), 0)
+        table.setColumnHidden(1, True)
+        table.setColumnHidden(table.COMMAND_COLUMN, False)
+
+        table._reset_column_layout()
+
+        self.assertEqual(
+            [header.visualIndex(i) for i in range(len(table.COLUMNS))],
+            list(range(len(table.COLUMNS))),
+        )
+        for column in range(len(table.COLUMNS)):
+            self.assertEqual(
+                table.isColumnHidden(column),
+                column == table.COMMAND_COLUMN,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
