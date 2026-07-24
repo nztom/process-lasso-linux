@@ -260,12 +260,19 @@ class NicePriorityDialog(QDialog):
         row.addStretch()
         layout.addLayout(row)
 
-        # Quick presets
+        # Windows Process Lasso calls these CPU Priority Classes. Linux has a
+        # continuous nice range, so these are the closest useful equivalents.
         presets_row = QHBoxLayout()
-        presets_row.addWidget(QLabel("Presets:"))
-        for label, val in [("High (-10)", -10), ("Normal (0)", 0), ("Low (5)", 5), ("Very Low (15)", 15), ("Idle (19)", 19)]:
+        presets_row.addWidget(QLabel("Priority class:"))
+        for label, val in [
+            ("Real-time (-20)", -20),
+            ("High (-10)", -10),
+            ("Above normal (-5)", -5),
+            ("Normal (0)", 0),
+            ("Below normal (5)", 5),
+            ("Idle (19)", 19),
+        ]:
             btn = QPushButton(label)
-            btn.setFixedWidth(110)
             btn.clicked.connect(lambda checked, v=val: self._spin.setValue(v))
             presets_row.addWidget(btn)
         presets_row.addStretch()
@@ -300,7 +307,10 @@ class IoNiceDialog(QDialog):
     def _build_ui(self, current_class: int, current_level: int):
         layout = QVBoxLayout(self)
 
-        info = QLabel("I/O class: Realtime requires root. Level 0=highest, 7=lowest (for RT and BE).")
+        info = QLabel(
+            "Linux mapping for Process Lasso I/O priorities: High = best-effort 0, "
+            "Normal = best-effort 4, Low = best-effort 7, and Very Low = idle."
+        )
         info.setWordWrap(True)
         layout.addWidget(info)
 
@@ -321,6 +331,22 @@ class IoNiceDialog(QDialog):
         grid.addWidget(self._level_spin, 1, 1)
         layout.addLayout(grid)
 
+        presets_row = QHBoxLayout()
+        presets_row.addWidget(QLabel("Priority class:"))
+        for label, io_class, level in [
+            ("High", 2, 0),
+            ("Normal", 2, 4),
+            ("Low", 2, 7),
+            ("Very Low", 3, 0),
+        ]:
+            button = QPushButton(label)
+            button.clicked.connect(
+                lambda checked, c=io_class, n=level: self._set_preset(c, n)
+            )
+            presets_row.addWidget(button)
+        presets_row.addStretch()
+        layout.addLayout(presets_row)
+
         self._on_class_changed()
 
         buttons = QDialogButtonBox(
@@ -333,6 +359,12 @@ class IoNiceDialog(QDialog):
     def _on_class_changed(self):
         cls = self._class_combo.currentData()
         self._level_spin.setEnabled(cls in (1, 2))
+
+    def _set_preset(self, io_class: int, level: int):
+        index = self._class_combo.findData(io_class)
+        if index >= 0:
+            self._class_combo.setCurrentIndex(index)
+        self._level_spin.setValue(level)
 
     def get_ionice_class(self) -> int:
         return self._class_combo.currentData()

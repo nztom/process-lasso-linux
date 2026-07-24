@@ -10,7 +10,7 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QTextEdit, QSystemTrayIcon, QMenu, QApplication,
-    QLineEdit, QLabel, QPushButton, QCheckBox,
+    QLineEdit, QLabel, QPushButton, QCheckBox, QComboBox,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSlot
 from PyQt6.QtGui import QIcon, QAction, QCloseEvent, QKeySequence, QShortcut
@@ -97,6 +97,14 @@ class MainWindow(QMainWindow):
         self._proc_filter.setPlaceholderText("Process name or PID…")
         self._proc_filter.setClearButtonEnabled(True)
         filter_row.addWidget(self._proc_filter)
+        filter_row.addWidget(QLabel("User:"))
+        self._user_filter = QComboBox()
+        self._user_filter.addItem("All users", "")
+        self._user_filter.setMinimumContentsLength(12)
+        filter_row.addWidget(self._user_filter)
+        self._show_root = QCheckBox("Show root processes")
+        self._show_root.setChecked(False)
+        filter_row.addWidget(self._show_root)
         filter_row.addStretch()
         proc_layout.addLayout(filter_row)
 
@@ -107,6 +115,11 @@ class MainWindow(QMainWindow):
         self._proc_table.rule_add_requested.connect(self._on_rule_add_from_table)
         self._proc_table.rule_value_manually_changed.connect(self._on_rule_value_manual_change)
         self._proc_filter.textChanged.connect(self._proc_table.set_filter)
+        self._user_filter.currentIndexChanged.connect(self._on_user_filter_changed)
+        self._show_root.toggled.connect(
+            lambda show: self._proc_table.set_hide_root(not show)
+        )
+        self._proc_table.available_users_changed.connect(self._update_user_filter)
         proc_layout.addWidget(self._proc_table)
 
         # Ctrl+F shortcut to focus filter
@@ -262,6 +275,23 @@ class MainWindow(QMainWindow):
         # previously matched by a now-deleted or changed rule don't stay stuck
         # with a stale affinity.
         self._monitor.reapply_all_defaults()
+
+    def _on_user_filter_changed(self, index: int):
+        self._proc_table.set_user_filter(self._user_filter.itemData(index) or "")
+
+    def _update_user_filter(self, users: list[str]):
+        """Refresh user choices without discarding the active selection."""
+        selected = self._user_filter.currentData() or ""
+        self._user_filter.blockSignals(True)
+        self._user_filter.clear()
+        self._user_filter.addItem("All users", "")
+        for user in users:
+            self._user_filter.addItem(user, user)
+        index = self._user_filter.findData(selected)
+        self._user_filter.setCurrentIndex(index if index >= 0 else 0)
+        self._user_filter.blockSignals(False)
+        if index < 0 and selected:
+            self._proc_table.set_user_filter("")
 
     @pyqtSlot(int)
     def _on_rule_value_manual_change(self, pid: int):

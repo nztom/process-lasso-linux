@@ -29,7 +29,7 @@ class RulesPanel(QWidget):
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        COLS = ["Enabled", "Force", "Name", "Pattern", "Match", "Affinity", "Nice", "I/O Class", "I/O Lvl"]
+        COLS = ["Enabled", "Force", "Name", "Pattern", "Match", "CPU Affinity", "CPU Priority", "I/O Class", "I/O Lvl"]
         self._table = QTableWidget(0, len(COLS))
         self._table.setHorizontalHeaderLabels(COLS)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -99,7 +99,10 @@ class RulesPanel(QWidget):
 
     def add_rule_direct(self, rule: Rule):
         """Called from ProcessTable 'Add Rule' context menu."""
-        self._engine.add_rule(rule)
+        if any(existing.rule_id == rule.rule_id for existing in self._engine.get_rules()):
+            self._engine.update_rule(rule)
+        else:
+            self._engine.add_rule(rule)
         self.refresh()
         self.rules_changed.emit()
 

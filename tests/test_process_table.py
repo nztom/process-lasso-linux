@@ -10,8 +10,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtTest import QSignalSpy
 
 from gui.process_table import ProcessTable
+from rules import Rule, RuleEngine
 
 
 class ProcessTableTests(unittest.TestCase):
@@ -33,6 +35,7 @@ class ProcessTableTests(unittest.TestCase):
 
     def test_command_column_contains_full_command_line(self):
         table = ProcessTable(None, None)
+        table.set_hide_root(False)
         command = "sudo -n /usr/bin/sleep 10"
         table.update_snapshot([{
             "pid": 1234,
@@ -98,6 +101,128 @@ class ProcessTableTests(unittest.TestCase):
                     header.sectionSize(column),
                     table.DEFAULT_COLUMN_WIDTHS[column],
                 )
+
+    def test_always_rule_uses_exact_process_name(self):
+        table = ProcessTable(None, None)
+        spy = QSignalSpy(table.rule_add_requested)
+
+        table._emit_always_rule(
+            {"pid": 1234, "name": "blackdesert64.exe"},
+            "CPU Priority",
+            nice=-10,
+        )
+
+        self.assertEqual(len(spy), 1)
+        rule = spy[0][0]
+        self.assertEqual(rule.pattern, "blackdesert64.exe")
+        self.assertEqual(rule.match_type, "exact")
+        self.assertEqual(rule.nice, -10)
+        self.assertIsNone(rule.affinity)
+        self.assertIsNone(rule.ionice_class)
+
+    def test_parse_ionice_display_value(self):
+        self.assertEqual(ProcessTable._parse_ionice("2/7"), (2, 7))
+        self.assertEqual(ProcessTable._parse_ionice(""), (2, 4))
+
+    def test_non_preset_always_priority_omits_custom_label(self):
+        self.assertEqual(ProcessTable._format_nice(-8), "-8")
+
+    def test_process_table_shows_current_and_always_rule_values(self):
+        engine = RuleEngine()
+        engine.add_rule(Rule(
+            name="Game",
+            pattern="game.exe",
+            match_type="exact",
+            affinity="4-7",
+            nice=-10,
+            ionice_class=3,
+        ))
+        table = ProcessTable(engine, None)
+        table.update_snapshot([{
+            "pid": 42,
+            "name": "game.exe",
+            "user": "user",
+            "sudo": False,
+            "cpu_percent": 1.0,
+            "mem_rss": 1024,
+            "nice": 0,
+            "affinity": "0-7",
+            "ionice": "2/4",
+            "cmdline": "game.exe",
+        }])
+
+        self.assertEqual(table.item(0, table.NICE_CURRENT_COLUMN).text(), "0")
+        self.assertEqual(table.item(0, table.NICE_ALWAYS_COLUMN).text(), "High (-10)")
+        self.assertEqual(table.item(0, table.AFFINITY_CURRENT_COLUMN).text(), "0-7")
+        self.assertEqual(table.item(0, table.AFFINITY_ALWAYS_COLUMN).text(), "4-7")
+        self.assertEqual(table.item(0, table.IONICE_CURRENT_COLUMN).text(), "2/4")
+        self.assertEqual(table.item(0, table.IONICE_ALWAYS_COLUMN).text(), "Very Low (3)")
+
+    def test_root_processes_are_hidden_by_default_and_can_be_shown(self):
+        table = ProcessTable(None, None)
+        snapshot = [
+            self._process(pid=1, name="root-task", user="root"),
+            self._process(pid=2, name="user-task", user="user"),
+        ]
+
+        table.update_snapshot(snapshot)
+        self.assertEqual(table.rowCount(), 1)
+        self.assertEqual(table.item(0, 1).text(), "user-task")
+
+        table.set_hide_root(False)
+        self.assertEqual(table.rowCount(), 2)
+
+    def test_processes_can_be_filtered_by_user(self):
+        table = ProcessTable(None, None)
+        table.set_hide_root(False)
+        table.update_snapshot([
+            self._process(pid=1, name="one", user="alice"),
+            self._process(pid=2, name="two", user="bob"),
+        ])
+
+        table.set_user_filter("bob")
+
+        self.assertEqual(table.rowCount(), 1)
+        self.assertEqual(table.item(0, 2).text(), "bob")
+
+    @staticmethod
+    def _process(pid: int, name: str, user: str) -> dict:
+        return {
+            "pid": pid,
+            "name": name,
+            "user": user,
+            "sudo": user == "root",
+            "cpu_percent": 0.0,
+            "mem_rss": 1024,
+            "nice": 0,
+            "affinity": "0-3",
+            "ionice": "2/4",
+            "cmdline": name,
+        }
+
+    def test_always_rule_reuses_existing_rule_id(self):
+        engine = RuleEngine()
+        existing = Rule(
+            name="game.exe — CPU Affinity",
+            pattern="game.exe",
+            match_type="exact",
+            affinity="0-3",
+            force_apply=True,
+        )
+        engine.add_rule(existing)
+        table = ProcessTable(engine, None)
+        spy = QSignalSpy(table.rule_add_requested)
+
+        table._emit_always_rule(
+            {"pid": 42, "name": "game.exe"},
+            "CPU Affinity",
+            affinity="4-7",
+        )
+
+        updated = spy[0][0]
+        self.assertEqual(updated.rule_id, existing.rule_id)
+        self.assertEqual(updated.affinity, "4-7")
+        self.assertTrue(updated.force_apply)
 
 
 if __name__ == "__main__":

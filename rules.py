@@ -132,6 +132,31 @@ class RuleEngine:
         """Return True when at least one enabled rule matches a process name."""
         return any(rule.matches(proc_name) for rule in self._rules)
 
+    def effective_settings(self, proc_name: str) -> dict:
+        """Return the final persistent settings produced by matching rules.
+
+        Rules are applied in list order, so a later matching rule with the same
+        setting wins.  This mirrors ``apply_to_process`` and is used by the
+        process table's Always columns.
+        """
+        settings = {
+            "affinity": None,
+            "nice": None,
+            "ionice_class": None,
+            "ionice_level": None,
+        }
+        for rule in self._rules:
+            if not rule.matches(proc_name):
+                continue
+            if rule.affinity is not None:
+                settings["affinity"] = rule.affinity
+            if rule.nice is not None:
+                settings["nice"] = rule.nice
+            if rule.ionice_class is not None:
+                settings["ionice_class"] = rule.ionice_class
+                settings["ionice_level"] = rule.ionice_level
+        return settings
+
     def forget_pid(self, pid: int):
         """Discard runtime attempt state after a process exits."""
         for rule in self._rules:

@@ -96,6 +96,30 @@ class RuleAttemptTests(unittest.TestCase):
 
         self.assertFalse(restored.force_apply)
 
+    def test_effective_settings_use_last_matching_value_per_field(self):
+        self.engine.add_rule(Rule(
+            name="Priority",
+            pattern="game.exe",
+            match_type="exact",
+            nice=-10,
+            ionice_class=2,
+            ionice_level=4,
+        ))
+        self.engine.add_rule(Rule(
+            name="Affinity override",
+            pattern="game",
+            match_type="contains",
+            affinity="4-7",
+            ionice_class=3,
+        ))
+
+        self.assertEqual(self.engine.effective_settings("game.exe"), {
+            "affinity": "4-7",
+            "nice": -10,
+            "ionice_class": 3,
+            "ionice_level": None,
+        })
+
 
 if __name__ == "__main__":
     unittest.main()

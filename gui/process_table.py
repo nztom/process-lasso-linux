@@ -21,10 +21,24 @@ class ProcessTable(QTableWidget):
 
     rule_add_requested = pyqtSignal(object)  # emits Rule
     rule_value_manually_changed = pyqtSignal(int)  # pid — stop its startup rule burst
+    available_users_changed = pyqtSignal(list)
 
-    COLUMNS = ["PID", "Name", "User", "Sudo", "CPU%", "Mem(MB)", "Nice", "Affinity", "I/O", "Status", "Command"]
+    COLUMNS = [
+        "PID", "Name", "User", "Sudo", "CPU%", "Mem(MB)",
+        "CPU Priority (current)", "CPU Priority (always)",
+        "CPU Affinity (current)", "CPU Affinity (always)",
+        "I/O Priority (current)", "I/O Priority (always)",
+        "Status", "Command",
+    ]
     SUDO_COLUMN = 3
-    COMMAND_COLUMN = 10
+    NICE_CURRENT_COLUMN = 6
+    NICE_ALWAYS_COLUMN = 7
+    AFFINITY_CURRENT_COLUMN = 8
+    AFFINITY_ALWAYS_COLUMN = 9
+    IONICE_CURRENT_COLUMN = 10
+    IONICE_ALWAYS_COLUMN = 11
+    STATUS_COLUMN = 12
+    COMMAND_COLUMN = 13
     DEFAULT_HIDDEN_COLUMNS = {SUDO_COLUMN, COMMAND_COLUMN}
     DEFAULT_COLUMN_WIDTHS = {
         0: 72,    # PID
@@ -33,11 +47,14 @@ class ProcessTable(QTableWidget):
         3: 60,    # Sudo
         4: 70,    # CPU%
         5: 85,    # Mem(MB)
-        6: 60,    # Nice
-        7: 110,   # Affinity
-        8: 65,    # I/O
-        9: 110,   # Status
-        10: 360,  # Command
+        6: 145,   # CPU Priority (current)
+        7: 145,   # CPU Priority (always)
+        8: 145,   # CPU Affinity (current)
+        9: 145,   # CPU Affinity (always)
+        10: 135,  # I/O Priority (current)
+        11: 135,  # I/O Priority (always)
+        12: 110,  # Status
+        13: 360,  # Command
     }
 
     def __init__(self, rule_engine, log_callback, parent=None):
@@ -49,6 +66,9 @@ class ProcessTable(QTableWidget):
         self._sort_col = 4   # CPU%
         self._sort_asc = False
         self._filter_text: str = ""
+        self._user_filter: str = ""
+        self._hide_root: bool = True
+        self._available_users: list[str] = []
         self._col_visible: list[bool] = [True] * len(self.COLUMNS)
         self._setup()
 
@@ -139,6 +159,13 @@ class ProcessTable(QTableWidget):
 
     def update_snapshot(self, snapshot: list[dict]):
         self._snapshot = snapshot
+        users = sorted(
+            {proc.get("user", "") for proc in snapshot if proc.get("user", "")},
+            key=str.casefold,
+        )
+        if users != self._available_users:
+            self._available_users = users
+            self.available_users_changed.emit(users)
         self._refresh_display()
 
     def set_filter(self, text: str):
@@ -146,7 +173,21 @@ class ProcessTable(QTableWidget):
         self._filter_text = text.strip().lower()
         self._refresh_display()
 
+    def set_user_filter(self, user: str):
+        """Show only processes owned by ``user``; an empty value shows all."""
+        self._user_filter = user.strip()
+        self._refresh_display()
+
+    def set_hide_root(self, hide: bool):
+        self._hide_root = hide
+        self._refresh_display()
+
     def _refresh_display(self):
+        def always_settings(proc: dict) -> dict:
+            if self._rule_engine is None:
+                return {}
+            return self._rule_engine.effective_settings(proc["name"])
+
         key_map = {
             0: lambda p: p["pid"],
             1: lambda p: p["name"].lower(),
@@ -155,10 +196,13 @@ class ProcessTable(QTableWidget):
             4: lambda p: p["cpu_percent"],
             5: lambda p: p["mem_rss"],
             6: lambda p: p["nice"],
-            7: lambda p: p["affinity"],
-            8: lambda p: p["ionice"],
-            9: lambda p: "",
-            10: lambda p: p.get("cmdline", "").lower(),
+            7: lambda p: self._format_nice(always_settings(p).get("nice")),
+            8: lambda p: p["affinity"],
+            9: lambda p: always_settings(p).get("affinity") or "",
+            10: lambda p: p["ionice"],
+            11: lambda p: self._format_ionice_rule(always_settings(p)),
+            12: lambda p: "",
+            13: lambda p: p.get("cmdline", "").lower(),
         }
         key_fn = key_map.get(self._sort_col, lambda p: 0)
         try:
@@ -166,7 +210,17 @@ class ProcessTable(QTableWidget):
         except Exception:
             sorted_snap = self._snapshot
 
-        # Apply filter
+        # Root processes are intentionally hidden on first launch, but remain
+        # available through the filter controls.
+        if self._hide_root:
+            sorted_snap = [p for p in sorted_snap if p.get("user", "") != "root"]
+        if self._user_filter:
+            sorted_snap = [
+                p for p in sorted_snap
+                if p.get("user", "") == self._user_filter
+            ]
+
+        # Apply text filter
         if self._filter_text:
             ft = self._filter_text
             sorted_snap = [
@@ -181,6 +235,7 @@ class ProcessTable(QTableWidget):
             pid = proc["pid"]
             cpu = proc["cpu_percent"]
             throttled = pid in self._throttled_pids
+            persistent = always_settings(proc)
             items = [
                 str(pid),
                 proc["name"],
@@ -189,8 +244,11 @@ class ProcessTable(QTableWidget):
                 f"{cpu:.1f}",
                 f"{proc['mem_rss'] / 1_048_576:.1f}",
                 str(proc["nice"]),
+                self._format_nice(persistent.get("nice")),
                 proc.get("affinity", ""),
+                persistent.get("affinity") or "",
                 proc.get("ionice", ""),
+                self._format_ionice_rule(persistent),
                 "⏸ Throttled" if throttled else "",
                 proc.get("cmdline", ""),
             ]
@@ -218,6 +276,38 @@ class ProcessTable(QTableWidget):
                     item.setForeground(row_color)
                 self.setItem(row, col, item)
 
+    @staticmethod
+    def _format_nice(value) -> str:
+        if value is None:
+            return ""
+        labels = {
+            -20: "Real-time",
+            -10: "High",
+            -5: "Above normal",
+            0: "Normal",
+            5: "Below normal",
+            19: "Idle",
+        }
+        label = labels.get(value)
+        return f"{label} ({value})" if label else str(value)
+
+    @staticmethod
+    def _format_ionice_rule(settings: dict) -> str:
+        io_class = settings.get("ionice_class")
+        level = settings.get("ionice_level")
+        if io_class is None:
+            return ""
+        labels = {
+            (2, 0): "High",
+            (2, 4): "Normal",
+            (2, 7): "Low",
+            (3, None): "Very Low",
+        }
+        lookup_level = None if io_class == 3 else level
+        label = labels.get((io_class, lookup_level), "Custom")
+        raw = str(io_class) if level is None else f"{io_class}/{level}"
+        return f"{label} ({raw})"
+
     def _selected_proc(self) -> dict | None:
         rows = self.selectedItems()
         if not rows:
@@ -225,9 +315,9 @@ class ProcessTable(QTableWidget):
         row = self.currentRow()
         pid_item = self.item(row, 0)
         name_item = self.item(row, 1)
-        nice_item = self.item(row, 6)
-        affinity_item = self.item(row, 7)
-        ionice_item = self.item(row, 8)
+        nice_item = self.item(row, self.NICE_CURRENT_COLUMN)
+        affinity_item = self.item(row, self.AFFINITY_CURRENT_COLUMN)
+        ionice_item = self.item(row, self.IONICE_CURRENT_COLUMN)
         if not pid_item:
             return None
         return {
@@ -287,18 +377,17 @@ class ProcessTable(QTableWidget):
                 lambda: self._do_kill(proc, force=True)
             )
             menu.addSeparator()
-        menu.addAction(
-            f"Set Affinity for {proc['name']} ({proc['pid']})",
-            lambda: self._do_set_affinity(proc)
-        )
-        menu.addAction(
-            f"Set Priority (nice) for {proc['name']} ({proc['pid']})",
-            lambda: self._do_set_nice(proc)
-        )
-        menu.addAction(
-            f"Set I/O Priority for {proc['name']} ({proc['pid']})",
-            lambda: self._do_set_ionice(proc)
-        )
+        affinity_menu = menu.addMenu("CPU Affinity")
+        affinity_menu.addAction("Current…", lambda: self._do_set_affinity(proc))
+        affinity_menu.addAction("Always…", lambda: self._do_add_affinity_rule(proc))
+
+        priority_menu = menu.addMenu("CPU Priority")
+        priority_menu.addAction("Current…", lambda: self._do_set_nice(proc))
+        priority_menu.addAction("Always…", lambda: self._do_add_priority_rule(proc))
+
+        io_menu = menu.addMenu("I/O Priority")
+        io_menu.addAction("Current…", lambda: self._do_set_ionice(proc))
+        io_menu.addAction("Always…", lambda: self._do_add_ionice_rule(proc))
         menu.addSeparator()
         menu.addAction(
             f"Add Rule for '{proc['name']}'...",
@@ -359,16 +448,80 @@ class ProcessTable(QTableWidget):
                 self._log_callback(msg)
 
     def _do_set_ionice(self, proc: dict):
-        dlg = IoNiceDialog(parent=self, title_suffix=proc["name"])
+        current_class, current_level = self._parse_ionice(proc.get("ionice", ""))
+        dlg = IoNiceDialog(current_class, current_level, self, proc["name"])
         if dlg.exec() == IoNiceDialog.DialogCode.Accepted:
             cls = dlg.get_ionice_class()
             lvl = dlg.get_ionice_level()
             if utils.set_ionice(proc["pid"], cls, lvl):
                 msg = f"Set ionice class={cls} level={lvl} on {proc['name']}({proc['pid']})"
+                self.rule_value_manually_changed.emit(proc["pid"])
             else:
                 msg = f"Failed to set ionice on {proc['name']}({proc['pid']})"
             if self._log_callback:
                 self._log_callback(msg)
+
+    @staticmethod
+    def _parse_ionice(value: str) -> tuple[int, int]:
+        """Parse the process-table ``class/level`` representation."""
+        try:
+            io_class, level = value.split("/", 1)
+            return int(io_class), int(level)
+        except (AttributeError, ValueError):
+            return 2, 4
+
+    def _emit_always_rule(self, proc: dict, label: str, **settings):
+        """Create a Windows-style ``Always`` rule for an exact process name."""
+        from rules import Rule
+
+        rule_name = f"{proc['name']} — {label}"
+        existing = None
+        if self._rule_engine is not None:
+            existing = next(
+                (
+                    rule for rule in self._rule_engine.get_rules()
+                    if rule.name == rule_name
+                    and rule.pattern == proc["name"]
+                    and rule.match_type == "exact"
+                ),
+                None,
+            )
+        rule = Rule(
+            name=rule_name,
+            pattern=proc["name"],
+            match_type="exact",
+            enabled=existing.enabled if existing else True,
+            force_apply=existing.force_apply if existing else False,
+            **settings,
+        )
+        if existing:
+            rule.rule_id = existing.rule_id
+        self.rule_add_requested.emit(rule)
+
+    def _do_add_affinity_rule(self, proc: dict):
+        dlg = AffinityDialog(proc.get("affinity", ""), self, proc["name"])
+        if dlg.exec() == AffinityDialog.DialogCode.Accepted:
+            self._emit_always_rule(
+                proc, "CPU Affinity", affinity=dlg.get_cpulist()
+            )
+
+    def _do_add_priority_rule(self, proc: dict):
+        dlg = NicePriorityDialog(proc.get("nice", 0), self, proc["name"])
+        if dlg.exec() == NicePriorityDialog.DialogCode.Accepted:
+            self._emit_always_rule(
+                proc, "CPU Priority", nice=dlg.get_nice()
+            )
+
+    def _do_add_ionice_rule(self, proc: dict):
+        current_class, current_level = self._parse_ionice(proc.get("ionice", ""))
+        dlg = IoNiceDialog(current_class, current_level, self, proc["name"])
+        if dlg.exec() == IoNiceDialog.DialogCode.Accepted:
+            self._emit_always_rule(
+                proc,
+                "I/O Priority",
+                ionice_class=dlg.get_ionice_class(),
+                ionice_level=dlg.get_ionice_level(),
+            )
 
     def _do_add_rule(self, proc: dict):
         from rules import Rule
