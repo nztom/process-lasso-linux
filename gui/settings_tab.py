@@ -98,7 +98,7 @@ class SettingsTab(QWidget):
         appear_group = QGroupBox("Appearance")
         appear_layout = QVBoxLayout(appear_group)
 
-        self._system_theme_cb = QCheckBox("Use system theme (disables Breeze Dark stylesheet)")
+        self._system_theme_cb = QCheckBox("Use system theme (disables Process Lasso theme)")
         self._system_theme_cb.setToolTip(
             "When checked, Process Lasso uses your OS/desktop dark/light theme\n"
             "instead of the built-in Breeze Dark stylesheet."

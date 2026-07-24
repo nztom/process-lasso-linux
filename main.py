@@ -330,6 +330,12 @@ QToolTip {
 QSplitter::handle { background-color: rgba(109, 40, 217, 0.25); }
 """
 
+from windows_theme import WINDOWS_DARK_THEME
+
+# Keep the legacy stylesheet above for reference while the Windows-inspired
+# theme is evaluated; this is the active custom theme used by the application.
+DARK_THEME = WINDOWS_DARK_THEME
+
 
 def main():
     # Required before QApplication on some platforms
