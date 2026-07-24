@@ -90,8 +90,14 @@ def _cpuset_to_cpulist(cpus: set[int]) -> str:
 
 def set_nice(pid: int, nice: int) -> bool:
     """Set nice priority via renice.
-    Negative values require root — failure logged silently.
+    Negative values require root and are delegated to the narrowly scoped
+    privileged helper. Non-negative values continue to run unprivileged.
     Returns True on success."""
+    if nice < 0:
+        import nice_helper
+
+        return nice_helper.set_negative_nice(pid, nice)
+
     try:
         result = subprocess.run(
             ["renice", "-n", str(nice), "-p", str(pid)],
