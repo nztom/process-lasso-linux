@@ -23,7 +23,9 @@ class ProcessTable(QTableWidget):
     rule_value_manually_changed = pyqtSignal(int)  # pid — stop its startup rule burst
 
     COLUMNS = ["PID", "Name", "User", "Sudo", "CPU%", "Mem(MB)", "Nice", "Affinity", "I/O", "Status", "Command"]
+    SUDO_COLUMN = 3
     COMMAND_COLUMN = 10
+    DEFAULT_HIDDEN_COLUMNS = {SUDO_COLUMN, COMMAND_COLUMN}
 
     def __init__(self, rule_engine, log_callback, parent=None):
         super().__init__(0, len(self.COLUMNS), parent)
@@ -39,7 +41,8 @@ class ProcessTable(QTableWidget):
 
     def _setup(self):
         self.setHorizontalHeaderLabels(self.COLUMNS)
-        self.setColumnHidden(self.COMMAND_COLUMN, True)
+        for column in self.DEFAULT_HIDDEN_COLUMNS:
+            self.setColumnHidden(column, True)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -82,7 +85,10 @@ class ProcessTable(QTableWidget):
             current_visual_index = hdr.visualIndex(logical_index)
             if current_visual_index != logical_index:
                 hdr.moveSection(current_visual_index, logical_index)
-            hdr.setSectionHidden(logical_index, logical_index == self.COMMAND_COLUMN)
+            hdr.setSectionHidden(
+                logical_index,
+                logical_index in self.DEFAULT_HIDDEN_COLUMNS,
+            )
 
     def _update_header_labels(self):
         """Re-set header labels (called after sort to add/remove arrow indicators)."""

@@ -25,6 +25,12 @@ class ProcessTableTests(unittest.TestCase):
         self.assertEqual(table.COLUMNS[table.COMMAND_COLUMN], "Command")
         self.assertTrue(table.isColumnHidden(table.COMMAND_COLUMN))
 
+    def test_sudo_column_is_hidden_by_default(self):
+        table = ProcessTable(None, None)
+
+        self.assertEqual(table.COLUMNS[table.SUDO_COLUMN], "Sudo")
+        self.assertTrue(table.isColumnHidden(table.SUDO_COLUMN))
+
     def test_command_column_contains_full_command_line(self):
         table = ProcessTable(None, None)
         command = "sudo -n /usr/bin/sleep 10"
@@ -63,7 +69,7 @@ class ProcessTableTests(unittest.TestCase):
         for column in range(len(table.COLUMNS)):
             self.assertEqual(
                 table.isColumnHidden(column),
-                column == table.COMMAND_COLUMN,
+                column in table.DEFAULT_HIDDEN_COLUMNS,
             )
 
 
