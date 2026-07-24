@@ -29,13 +29,14 @@ class SetNiceTests(unittest.TestCase):
         run.assert_not_called()
 
     @mock.patch("utils.subprocess.run")
-    def test_non_negative_nice_remains_unprivileged(self, run):
+    @mock.patch("utils._get_tids", return_value=[1234, 1235])
+    def test_non_negative_nice_sets_all_threads_unprivileged(self, get_tids, run):
         run.return_value.returncode = 0
 
         self.assertTrue(utils.set_nice(1234, 5))
 
         run.assert_called_once_with(
-            ["renice", "-n", "5", "-p", "1234"],
+            ["renice", "-n", "5", "-p", "1234", "1235"],
             capture_output=True,
             text=True,
             timeout=5,

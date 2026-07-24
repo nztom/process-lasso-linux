@@ -98,9 +98,12 @@ def set_nice(pid: int, nice: int) -> bool:
 
         return nice_helper.set_negative_nice(pid, nice)
 
+    tids = _get_tids(pid)
+    if not tids:
+        return False
     try:
         result = subprocess.run(
-            ["renice", "-n", str(nice), "-p", str(pid)],
+            ["renice", "-n", str(nice), "-p", *[str(tid) for tid in tids]],
             capture_output=True,
             text=True,
             timeout=5,
