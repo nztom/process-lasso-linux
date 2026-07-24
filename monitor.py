@@ -14,8 +14,6 @@ import utils
 
 log = logging.getLogger(__name__)
 
-RULE_APPLY_BURST_ATTEMPTS = 10
-
 
 def _resolve_name(comm: str, cmdline: list[str]) -> str:
     """Return the best human-readable process name.
@@ -109,10 +107,6 @@ class MonitorThread(QThread):
         self._stop = False
         self._known_pids: set[int] = set()
 
-        # Per-PID rule application attempts. Rules get a short startup burst,
-        # then are left alone until the PID exits or the rules are edited.
-        self._rule_apply_attempts: dict[int, int] = {}
-
         # Track original affinity before we change it, for "Reset All" function.
         # pid → frozenset of CPU numbers that were online when we first touched the process.
         self._original_affinities: dict[int, frozenset] = {}
@@ -150,16 +144,11 @@ class MonitorThread(QThread):
                 name = _resolve_name(comm, cmdline_raw)
                 if self._rule_engine.matches_process(name):
                     self._rule_engine.apply_to_process(pid, name)
-                    self._rule_apply_attempts[pid] = 1
                 elif default:
                     if utils.set_affinity(pid, default):
                         self._emit_log(f"[Default] affinity={default} → {name}({pid})")
             except OSError:
                 pass
-
-    def invalidate_rule_applications(self):
-        """Restart rule bursts after the rule set is edited."""
-        self._rule_apply_attempts.clear()
 
     def set_gaming_mode(self, active: bool, elevate_nice: bool):
         """Called from GUI thread when Gaming Mode is toggled.
@@ -184,17 +173,7 @@ class MonitorThread(QThread):
 
     def set_manual_rule_override(self, pid: int):
         """Stop the startup burst after a manual affinity or nice change."""
-        self._rule_apply_attempts[pid] = RULE_APPLY_BURST_ATTEMPTS
-
-    def _continue_rule_bursts(self, snapshot: list[dict]):
-        """Perform one enforcement pass for PIDs whose startup burst is active."""
-        for info in snapshot:
-            pid = info["pid"]
-            attempts = self._rule_apply_attempts.get(pid)
-            if attempts is None or attempts >= RULE_APPLY_BURST_ATTEMPTS:
-                continue
-            self._rule_engine.apply_to_process(pid, info["name"])
-            self._rule_apply_attempts[pid] = attempts + 1
+        self._rule_engine.suppress_pid(pid)
 
     def stop(self):
         self._stop = True
@@ -240,7 +219,6 @@ class MonitorThread(QThread):
         matched = self._rule_engine.matches_process(name)
         if matched:
             self._rule_engine.apply_to_process(pid, name)
-            self._rule_apply_attempts[pid] = 1
             # Rule matched — if gaming mode + elevate_nice, apply nice -1
             if self._gaming_mode and self._gaming_mode_elevate_nice and pid not in self._gaming_niced:
                 import cpu_park
@@ -286,14 +264,13 @@ class MonitorThread(QThread):
 
             # Detect new PIDs: apply matching rule OR default affinity
             new_pids = current_pids - self._known_pids
+            exited_pids = self._known_pids - current_pids
             if new_pids:
                 for info in new_snapshot:
                     if info["pid"] in new_pids:
                         self._apply_new_pid(info)
-            self._rule_apply_attempts = {
-                pid: attempts for pid, attempts in self._rule_apply_attempts.items()
-                if pid in current_pids
-            }
+            for pid in exited_pids:
+                self._rule_engine.forget_pid(pid)
             self._known_pids = current_pids
             snapshot = new_snapshot
 
@@ -303,7 +280,8 @@ class MonitorThread(QThread):
 
             # Give newly seen matching processes a short rule burst.
             if elapsed_enforce >= enforce_interval:
-                self._continue_rule_bursts(snapshot)
+                for info in snapshot:
+                    self._rule_engine.apply_to_process(info["pid"], info["name"])
                 last_enforce = now
 
             # ProBalance every 1.0s

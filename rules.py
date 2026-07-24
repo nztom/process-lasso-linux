@@ -11,6 +11,8 @@ import utils
 
 log = logging.getLogger(__name__)
 
+RULE_APPLY_ATTEMPTS = 10
+
 
 @dataclass
 class Rule:
@@ -23,6 +25,11 @@ class Rule:
     ionice_class: Optional[int] = None
     ionice_level: Optional[int] = None
     enabled: bool = True
+    _attempts_by_pid: dict[int, int] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
 
     @classmethod
     def from_dict(cls, d: dict) -> "Rule":
@@ -65,6 +72,21 @@ class Rule:
         else:  # contains
             return self.pattern.lower() in proc_name.lower()
 
+    def can_apply(self, pid: int) -> bool:
+        return self._attempts_by_pid.get(pid, 0) < RULE_APPLY_ATTEMPTS
+
+    def record_attempt(self, pid: int):
+        self._attempts_by_pid[pid] = self._attempts_by_pid.get(pid, 0) + 1
+
+    def forget_pid(self, pid: int):
+        self._attempts_by_pid.pop(pid, None)
+
+    def suppress_pid(self, pid: int):
+        self._attempts_by_pid[pid] = RULE_APPLY_ATTEMPTS
+
+    def reset_attempts(self):
+        self._attempts_by_pid.clear()
+
 
 class RuleEngine:
     """Holds the list of rules and applies them to processes."""
@@ -94,6 +116,7 @@ class RuleEngine:
         self._rules = [r for r in self._rules if r.rule_id != rule_id]
 
     def update_rule(self, rule: Rule):
+        rule.reset_attempts()
         for i, r in enumerate(self._rules):
             if r.rule_id == rule.rule_id:
                 self._rules[i] = rule
@@ -106,12 +129,23 @@ class RuleEngine:
         """Return True when at least one enabled rule matches a process name."""
         return any(rule.matches(proc_name) for rule in self._rules)
 
+    def forget_pid(self, pid: int):
+        """Discard runtime attempt state after a process exits."""
+        for rule in self._rules:
+            rule.forget_pid(pid)
+
+    def suppress_pid(self, pid: int):
+        """Stop all current rules from overriding a manual process change."""
+        for rule in self._rules:
+            rule.suppress_pid(pid)
+
     def apply_to_process(self, pid: int, proc_name: str) -> list[str]:
         """Apply all matching rules to a process. Returns list of action strings."""
         actions = []
         for rule in self._rules:
-            if not rule.matches(proc_name):
+            if not rule.matches(proc_name) or not rule.can_apply(pid):
                 continue
+            rule.record_attempt(pid)
             if rule.affinity is not None:
                 if utils.set_affinity(pid, rule.affinity):
                     msg = f"[Rule:{rule.name}] Set affinity={rule.affinity} on {proc_name}({pid})"

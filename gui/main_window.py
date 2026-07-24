@@ -258,7 +258,6 @@ class MainWindow(QMainWindow):
 
     def _on_rules_changed(self):
         self._save_config()
-        self._monitor.invalidate_rule_applications()
         # Re-apply rules + default to all running processes so that processes
         # previously matched by a now-deleted or changed rule don't stay stuck
         # with a stale affinity.

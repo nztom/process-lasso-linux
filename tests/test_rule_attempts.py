@@ -1,0 +1,80 @@
+"""Tests for per-rule, per-process bounded enforcement."""
+from __future__ import annotations
+
+import pathlib
+import sys
+import unittest
+from unittest import mock
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+from rules import Rule, RuleEngine, RULE_APPLY_ATTEMPTS
+
+
+class RuleAttemptTests(unittest.TestCase):
+    def setUp(self):
+        self.engine = RuleEngine()
+        self.rule = Rule(name="Game", pattern="game.exe", match_type="exact", affinity="0-3")
+        self.engine.add_rule(self.rule)
+
+    @mock.patch("rules.utils.set_affinity", return_value=True)
+    def test_rule_stops_after_ten_attempts(self, set_affinity):
+        for _ in range(20):
+            self.engine.apply_to_process(100, "game.exe")
+
+        self.assertEqual(set_affinity.call_count, RULE_APPLY_ATTEMPTS)
+
+    @mock.patch("rules.utils.set_affinity", return_value=True)
+    def test_attempts_are_independent_per_pid(self, set_affinity):
+        for _ in range(20):
+            self.engine.apply_to_process(100, "game.exe")
+            self.engine.apply_to_process(200, "game.exe")
+
+        self.assertEqual(set_affinity.call_count, RULE_APPLY_ATTEMPTS * 2)
+
+    @mock.patch("rules.utils.set_affinity", return_value=True)
+    def test_forgetting_pid_allows_rule_to_apply_again(self, set_affinity):
+        for _ in range(RULE_APPLY_ATTEMPTS):
+            self.engine.apply_to_process(100, "game.exe")
+        self.engine.forget_pid(100)
+        self.engine.apply_to_process(100, "game.exe")
+
+        self.assertEqual(set_affinity.call_count, RULE_APPLY_ATTEMPTS + 1)
+
+    @mock.patch("rules.utils.set_affinity", return_value=True)
+    def test_manual_suppression_stops_rule(self, set_affinity):
+        self.engine.apply_to_process(100, "game.exe")
+        self.engine.suppress_pid(100)
+        self.engine.apply_to_process(100, "game.exe")
+
+        set_affinity.assert_called_once_with(100, "0-3")
+
+    @mock.patch("rules.utils.set_nice", return_value=True)
+    @mock.patch("rules.utils.set_affinity", return_value=True)
+    def test_edit_resets_only_edited_rule(self, set_affinity, set_nice):
+        nice_rule = Rule(name="Nice", pattern="game.exe", match_type="exact", nice=-1)
+        self.engine.add_rule(nice_rule)
+        for _ in range(RULE_APPLY_ATTEMPTS):
+            self.engine.apply_to_process(100, "game.exe")
+
+        edited = Rule(
+            rule_id=self.rule.rule_id,
+            name="Game",
+            pattern="game.exe",
+            match_type="exact",
+            affinity="4-7",
+        )
+        self.engine.update_rule(edited)
+        self.engine.apply_to_process(100, "game.exe")
+
+        self.assertEqual(set_affinity.call_count, RULE_APPLY_ATTEMPTS + 1)
+        self.assertEqual(set_nice.call_count, RULE_APPLY_ATTEMPTS)
+        set_affinity.assert_called_with(100, "4-7")
+
+    def test_attempt_state_is_not_serialized(self):
+        self.rule.record_attempt(100)
+        self.assertNotIn("_attempts_by_pid", self.rule.to_dict())
+
+
+if __name__ == "__main__":
+    unittest.main()
