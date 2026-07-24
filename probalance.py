@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -72,7 +73,7 @@ class ProBalance:
             cpu = proc.get("cpu_percent", 0.0)
             current_nice = proc.get("nice", 0)
 
-            if self._is_exempt(name):
+            if pid == os.getpid() or self._is_exempt(name):
                 continue
 
             if pid not in self._states:

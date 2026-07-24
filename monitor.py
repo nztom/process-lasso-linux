@@ -82,8 +82,8 @@ def _resolve_name(comm: str, cmdline: list[str]) -> str:
     return comm
 
 
-def _safe_proc_info(proc: psutil.Process) -> dict | None:
-    """Collect process info safely. Returns None if process is gone/denied."""
+def _safe_proc_identity(proc: psutil.Process) -> dict | None:
+    """Collect cacheable process identity fields once per PID."""
     try:
         with proc.oneshot():
             pid = proc.pid
@@ -109,41 +109,64 @@ def _safe_proc_info(proc: psutil.Process) -> dict | None:
                     sudo = parent is not None and parent.name() == "sudo"
                 except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
                     pass
-            cpu = proc.cpu_percent()
-            mem = proc.memory_info().rss
             try:
                 nice = proc.nice()
             except (psutil.AccessDenied, AttributeError):
                 nice = 0
-            try:
-                affinity = proc.cpu_affinity()
-                affinity_str = utils._cpuset_to_cpulist(set(affinity))
-            except (psutil.AccessDenied, AttributeError):
-                affinity_str = ""
-            try:
-                ionice = proc.ionice()
-                ionice_str = f"{ionice.ioclass}/{ionice.value}"
-            except (psutil.AccessDenied, AttributeError):
-                ionice_str = ""
-            try:
-                cmdline_parts = proc.cmdline()
-                cmdline_str = " ".join(cmdline_parts) if cmdline_parts else ""
-            except (psutil.AccessDenied, AttributeError):
-                cmdline_str = ""
             return {
                 "pid": pid,
+                "comm": comm,
                 "name": name,
                 "user": username,
                 "sudo": sudo,
-                "cpu_percent": cpu,
-                "mem_rss": mem,
+                "cpu_percent": 0.0,
+                "mem_rss": 0,
                 "nice": nice,
-                "affinity": affinity_str,
-                "ionice": ionice_str,
-                "cmdline": cmdline_str,
+                "affinity": "",
+                "ionice": "",
+                "cmdline": " ".join(cmdline) if cmdline else "",
             }
     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
         return None
+
+
+def _update_proc_metrics(
+    proc: psutil.Process,
+    info: dict,
+    *,
+    include_details: bool,
+) -> bool:
+    """Refresh dynamic fields; expensive display details are optional."""
+    try:
+        with proc.oneshot():
+            info["cpu_percent"] = proc.cpu_percent()
+            try:
+                info["nice"] = proc.nice()
+            except (psutil.AccessDenied, AttributeError):
+                pass
+            if include_details:
+                info["mem_rss"] = proc.memory_info().rss
+                try:
+                    affinity = proc.cpu_affinity()
+                    info["affinity"] = utils._cpuset_to_cpulist(set(affinity))
+                except (psutil.AccessDenied, AttributeError):
+                    pass
+                try:
+                    ionice = proc.ionice()
+                    info["ionice"] = f"{ionice.ioclass}/{ionice.value}"
+                except (psutil.AccessDenied, AttributeError):
+                    pass
+        return True
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return False
+
+
+def _safe_proc_info(proc: psutil.Process) -> dict | None:
+    """Collect a complete process record for callers outside the monitor."""
+    info = _safe_proc_identity(proc)
+    if info is None or not _update_proc_metrics(proc, info, include_details=True):
+        return None
+    return info
 
 
 class MonitorThread(QThread):
@@ -166,6 +189,7 @@ class MonitorThread(QThread):
         self._config = config
         self._stop = False
         self._known_pids: set[int] = set()
+        self._process_cache: dict[int, dict] = {}
 
         # Track original affinity before we change it, for "Reset All" function.
         # pid → frozenset of CPU numbers that were online when we first touched the process.
@@ -292,6 +316,46 @@ class MonitorThread(QThread):
                 if utils.set_affinity(pid, default):
                     self._emit_log(f"[Default] affinity={default} → {name}({pid})")
 
+    def _sync_processes(self, procs: list[psutil.Process]) -> dict[int, psutil.Process]:
+        """Update the PID set and cache identities only for new/changed PIDs."""
+        by_pid = {proc.pid: proc for proc in procs}
+        current_pids = set(by_pid)
+        new_pids = current_pids - self._known_pids
+        exited_pids = self._known_pids - current_pids
+
+        for pid in new_pids:
+            info = _safe_proc_identity(by_pid[pid])
+            if info is not None:
+                self._process_cache[pid] = info
+                self._apply_new_pid(info)
+
+        # A process can exec into a different program without changing PID.
+        # Checking only the cheap comm field keeps rule names correct without
+        # rebuilding every process's full metadata on each enforcement pass.
+        for pid in current_pids - new_pids:
+            info = self._process_cache.get(pid)
+            if info is None:
+                refreshed = _safe_proc_identity(by_pid[pid])
+                if refreshed is not None:
+                    self._process_cache[pid] = refreshed
+                    self._apply_new_pid(refreshed)
+                continue
+            try:
+                if by_pid[pid].name() != info.get("comm"):
+                    refreshed = _safe_proc_identity(by_pid[pid])
+                    if refreshed is not None:
+                        self._process_cache[pid] = refreshed
+                        self._apply_new_pid(refreshed)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+
+        for pid in exited_pids:
+            self._rule_engine.forget_pid(pid)
+            self._process_cache.pop(pid, None)
+
+        self._known_pids = current_pids
+        return by_pid
+
     def run(self):
         tick_interval = 0.1
         last_enforce = 0.0
@@ -308,51 +372,50 @@ class MonitorThread(QThread):
           try:
             now = time.monotonic()
 
-            # Collect current snapshot
-            try:
-                procs = list(psutil.process_iter())
-            except Exception:
-                procs = []
-
-            new_snapshot = []
-            current_pids = set()
-            for proc in procs:
-                info = _safe_proc_info(proc)
-                if info is not None:
-                    new_snapshot.append(info)
-                    current_pids.add(info["pid"])
-
-            # Detect new PIDs: apply matching rule OR default affinity
-            new_pids = current_pids - self._known_pids
-            exited_pids = self._known_pids - current_pids
-            if new_pids:
-                for info in new_snapshot:
-                    if info["pid"] in new_pids:
-                        self._apply_new_pid(info)
-            for pid in exited_pids:
-                self._rule_engine.forget_pid(pid)
-            self._known_pids = current_pids
-            snapshot = new_snapshot
-
             elapsed_enforce = now - last_enforce
             elapsed_pb = now - last_probalance
             elapsed_snap = now - last_snapshot
 
+            enforce_due = elapsed_enforce >= enforce_interval
+            pb_due = elapsed_pb >= 1.0
+            snapshot_due = elapsed_snap >= snapshot_interval
+
+            if not (enforce_due or pb_due or snapshot_due):
+                time.sleep(tick_interval)
+                continue
+
+            try:
+                procs = list(psutil.process_iter())
+            except Exception:
+                procs = []
+            by_pid = self._sync_processes(procs)
+
             # Give newly seen matching processes a short rule burst.
-            if elapsed_enforce >= enforce_interval:
-                for info in snapshot:
+            if enforce_due:
+                for info in self._process_cache.values():
                     self._rule_engine.apply_to_process(info["pid"], info["name"])
                 last_enforce = now
 
+            # Refresh CPU/nice only when ProBalance or the display needs them.
+            if pb_due or snapshot_due:
+                for pid, info in list(self._process_cache.items()):
+                    proc = by_pid.get(pid)
+                    if proc is not None:
+                        _update_proc_metrics(proc, info, include_details=snapshot_due)
+            snapshot = list(self._process_cache.values())
+
             # ProBalance every 1.0s
-            if elapsed_pb >= 1.0:
+            if pb_due:
                 pb_tick = now - last_pb_tick
                 last_pb_tick = now
-                self._probalance.tick(snapshot, pb_tick)
+                self._probalance.tick(
+                    [info for info in snapshot if info["pid"] != os.getpid()],
+                    pb_tick,
+                )
                 last_probalance = now
 
             # Snapshot emit every 2.0s
-            if elapsed_snap >= snapshot_interval:
+            if snapshot_due:
                 self.process_snapshot_ready.emit(list(snapshot))
                 try:
                     raw = psutil.cpu_percent(percpu=True)
