@@ -9,6 +9,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtTest import QSignalSpy
 
@@ -51,6 +52,27 @@ class ProcessTableTests(unittest.TestCase):
         }])
 
         self.assertEqual(table.item(0, table.COMMAND_COLUMN).text(), command)
+
+    def test_all_column_data_is_left_aligned(self):
+        table = ProcessTable(None, None)
+        table.set_hide_root(False)
+        table.update_snapshot([{
+            "pid": 1234,
+            "name": "sleep",
+            "user": "user",
+            "sudo": False,
+            "cpu_percent": 12.3,
+            "mem_rss": 1_048_576,
+            "nice": 0,
+            "affinity": "0-3",
+            "ionice": "2/4",
+            "cmdline": "/usr/bin/sleep 10",
+        }])
+
+        for column in range(table.columnCount()):
+            alignment = table.item(0, column).textAlignment()
+            self.assertTrue(alignment & Qt.AlignmentFlag.AlignLeft, column)
+            self.assertFalse(alignment & Qt.AlignmentFlag.AlignRight, column)
 
     def test_columns_are_movable(self):
         table = ProcessTable(None, None)

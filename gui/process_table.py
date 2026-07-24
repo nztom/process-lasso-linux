@@ -268,8 +268,6 @@ class ProcessTable(QTableWidget):
             for col, text in enumerate(items):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-                if col in (4, 5, 6):
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
                 if col == 1 and cmdline:
                     item.setToolTip(cmdline)
                 if row_color is not None:
