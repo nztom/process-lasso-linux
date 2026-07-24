@@ -14,6 +14,8 @@ import utils
 
 log = logging.getLogger(__name__)
 
+RULE_APPLY_BURST_ATTEMPTS = 10
+
 
 def _resolve_name(comm: str, cmdline: list[str]) -> str:
     """Return the best human-readable process name.
@@ -89,7 +91,7 @@ def _safe_proc_info(proc: psutil.Process) -> dict | None:
 class MonitorThread(QThread):
     """
     Background thread that:
-    - Every 0.5s: enforces rules on all matching processes
+    - Every 0.5s: continues the startup rule burst for new processes
     - Every 1.0s: runs ProBalance tick
     - Every 2.0s: emits process_snapshot_ready with a copy of the snapshot
     - On new PID: applies matching rule, or default affinity if no rule matched
@@ -107,6 +109,10 @@ class MonitorThread(QThread):
         self._stop = False
         self._known_pids: set[int] = set()
 
+        # Per-PID rule application attempts. Rules get a short startup burst,
+        # then are left alone until the PID exits or the rules are edited.
+        self._rule_apply_attempts: dict[int, int] = {}
+
         # Track original affinity before we change it, for "Reset All" function.
         # pid → frozenset of CPU numbers that were online when we first touched the process.
         self._original_affinities: dict[int, frozenset] = {}
@@ -115,11 +121,6 @@ class MonitorThread(QThread):
         self._gaming_mode: bool = False
         self._gaming_mode_elevate_nice: bool = False
         self._gaming_niced: dict[int, int] = {}  # pid → original nice
-
-        # Manual affinity overrides: pid → expiry monotonic time.
-        # While an entry is active, the enforcement loop skips rule re-application
-        # for that PID so the user's manual change isn't immediately reverted.
-        self._manual_overrides: dict[int, float] = {}
 
         # Wire log callbacks
         rule_engine.set_log_callback(self._emit_log)
@@ -139,8 +140,6 @@ class MonitorThread(QThread):
         """Force re-apply default affinity to all currently known PIDs.
         Called when the user changes the default affinity setting."""
         default = self._default_affinity()
-        if not default:
-            return
         for pid in list(self._known_pids):
             try:
                 comm = open(f"/proc/{pid}/comm").read().strip()
@@ -149,12 +148,18 @@ class MonitorThread(QThread):
                 except OSError:
                     cmdline_raw = []
                 name = _resolve_name(comm, cmdline_raw)
-                actions = self._rule_engine.apply_to_process(pid, name)
-                if not actions:
+                if self._rule_engine.matches_process(name):
+                    self._rule_engine.apply_to_process(pid, name)
+                    self._rule_apply_attempts[pid] = 1
+                elif default:
                     if utils.set_affinity(pid, default):
                         self._emit_log(f"[Default] affinity={default} → {name}({pid})")
             except OSError:
                 pass
+
+    def invalidate_rule_applications(self):
+        """Restart rule bursts after the rule set is edited."""
+        self._rule_apply_attempts.clear()
 
     def set_gaming_mode(self, active: bool, elevate_nice: bool):
         """Called from GUI thread when Gaming Mode is toggled.
@@ -177,11 +182,19 @@ class MonitorThread(QThread):
         self._gaming_niced.clear()
         self._emit_log(f"[Gaming Mode] Restored nice for {count} processes.")
 
-    def set_manual_affinity_override(self, pid: int, duration_s: float = 30.0):
-        """Suppress rule enforcement for pid for duration_s seconds.
-        Called when the user manually changes a process's affinity via the GUI
-        so that the enforcement loop doesn't immediately revert the change."""
-        self._manual_overrides[pid] = time.monotonic() + duration_s
+    def set_manual_rule_override(self, pid: int):
+        """Stop the startup burst after a manual affinity or nice change."""
+        self._rule_apply_attempts[pid] = RULE_APPLY_BURST_ATTEMPTS
+
+    def _continue_rule_bursts(self, snapshot: list[dict]):
+        """Perform one enforcement pass for PIDs whose startup burst is active."""
+        for info in snapshot:
+            pid = info["pid"]
+            attempts = self._rule_apply_attempts.get(pid)
+            if attempts is None or attempts >= RULE_APPLY_BURST_ATTEMPTS:
+                continue
+            self._rule_engine.apply_to_process(pid, info["name"])
+            self._rule_apply_attempts[pid] = attempts + 1
 
     def stop(self):
         self._stop = True
@@ -224,8 +237,10 @@ class MonitorThread(QThread):
         pid = info["pid"]
         name = info["name"]
         self._capture_original(pid)
-        actions = self._rule_engine.apply_to_process(pid, name)
-        if actions:
+        matched = self._rule_engine.matches_process(name)
+        if matched:
+            self._rule_engine.apply_to_process(pid, name)
+            self._rule_apply_attempts[pid] = 1
             # Rule matched — if gaming mode + elevate_nice, apply nice -1
             if self._gaming_mode and self._gaming_mode_elevate_nice and pid not in self._gaming_niced:
                 import cpu_park
@@ -275,6 +290,10 @@ class MonitorThread(QThread):
                 for info in new_snapshot:
                     if info["pid"] in new_pids:
                         self._apply_new_pid(info)
+            self._rule_apply_attempts = {
+                pid: attempts for pid, attempts in self._rule_apply_attempts.items()
+                if pid in current_pids
+            }
             self._known_pids = current_pids
             snapshot = new_snapshot
 
@@ -282,17 +301,9 @@ class MonitorThread(QThread):
             elapsed_pb = now - last_probalance
             elapsed_snap = now - last_snapshot
 
-            # Rule enforcement every 0.5s (rules only — not default, too expensive)
+            # Give newly seen matching processes a short rule burst.
             if elapsed_enforce >= enforce_interval:
-                # Expire stale manual overrides
-                self._manual_overrides = {
-                    pid: exp for pid, exp in self._manual_overrides.items() if exp > now
-                }
-                for info in snapshot:
-                    pid = info["pid"]
-                    if pid in self._manual_overrides:
-                        continue  # user manually set affinity — don't override for now
-                    self._rule_engine.apply_to_process(pid, info["name"])
+                self._continue_rule_bursts(snapshot)
                 last_enforce = now
 
             # ProBalance every 1.0s

@@ -102,6 +102,10 @@ class RuleEngine:
     def to_dict_list(self) -> list[dict]:
         return [r.to_dict() for r in self._rules]
 
+    def matches_process(self, proc_name: str) -> bool:
+        """Return True when at least one enabled rule matches a process name."""
+        return any(rule.matches(proc_name) for rule in self._rules)
+
     def apply_to_process(self, pid: int, proc_name: str) -> list[str]:
         """Apply all matching rules to a process. Returns list of action strings."""
         actions = []

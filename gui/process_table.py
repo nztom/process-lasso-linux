@@ -20,7 +20,7 @@ class ProcessTable(QTableWidget):
     """Sortable process table with right-click context menu."""
 
     rule_add_requested = pyqtSignal(object)  # emits Rule
-    affinity_manually_changed = pyqtSignal(int)  # pid — suppress rule re-enforcement
+    rule_value_manually_changed = pyqtSignal(int)  # pid — stop its startup rule burst
 
     COLUMNS = ["PID", "Name", "CPU%", "Mem(MB)", "Nice", "Affinity", "I/O", "Status"]
 
@@ -285,8 +285,7 @@ class ProcessTable(QTableWidget):
             cpulist = dlg.get_cpulist()
             if utils.set_affinity(proc["pid"], cpulist):
                 msg = f"Set affinity={cpulist} on {proc['name']}({proc['pid']})"
-                # Tell the monitor not to override this for 30 s
-                self.affinity_manually_changed.emit(proc["pid"])
+                self.rule_value_manually_changed.emit(proc["pid"])
             else:
                 msg = f"Failed to set affinity on {proc['name']}({proc['pid']})"
             if self._log_callback:
@@ -298,6 +297,7 @@ class ProcessTable(QTableWidget):
             nice = dlg.get_nice()
             if utils.set_nice(proc["pid"], nice):
                 msg = f"Set nice={nice} on {proc['name']}({proc['pid']})"
+                self.rule_value_manually_changed.emit(proc["pid"])
             else:
                 msg = f"Failed to set nice={nice} on {proc['name']}({proc['pid']}) (root needed?)"
             if self._log_callback:

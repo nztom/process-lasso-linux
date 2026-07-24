@@ -105,7 +105,7 @@ class MainWindow(QMainWindow):
             log_callback=self._append_log,
         )
         self._proc_table.rule_add_requested.connect(self._on_rule_add_from_table)
-        self._proc_table.affinity_manually_changed.connect(self._on_affinity_manual_change)
+        self._proc_table.rule_value_manually_changed.connect(self._on_rule_value_manual_change)
         self._proc_filter.textChanged.connect(self._proc_table.set_filter)
         proc_layout.addWidget(self._proc_table)
 
@@ -258,14 +258,15 @@ class MainWindow(QMainWindow):
 
     def _on_rules_changed(self):
         self._save_config()
+        self._monitor.invalidate_rule_applications()
         # Re-apply rules + default to all running processes so that processes
         # previously matched by a now-deleted or changed rule don't stay stuck
         # with a stale affinity.
         self._monitor.reapply_all_defaults()
 
     @pyqtSlot(int)
-    def _on_affinity_manual_change(self, pid: int):
-        self._monitor.set_manual_affinity_override(pid, 30.0)
+    def _on_rule_value_manual_change(self, pid: int):
+        self._monitor.set_manual_rule_override(pid)
 
     def _on_rule_add_from_table(self, rule):
         self._rules_panel.add_rule_direct(rule)
