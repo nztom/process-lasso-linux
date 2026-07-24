@@ -75,6 +75,27 @@ class RuleAttemptTests(unittest.TestCase):
         self.rule.record_attempt(100)
         self.assertNotIn("_attempts_by_pid", self.rule.to_dict())
 
+    @mock.patch("rules.utils.set_affinity", return_value=True)
+    def test_force_apply_bypasses_attempt_limit_and_suppression(self, set_affinity):
+        self.rule.force_apply = True
+        self.engine.suppress_pid(100)
+        for _ in range(RULE_APPLY_ATTEMPTS + 5):
+            self.engine.apply_to_process(100, "game.exe")
+
+        self.assertEqual(set_affinity.call_count, RULE_APPLY_ATTEMPTS + 5)
+
+    def test_force_apply_round_trips_through_config(self):
+        self.rule.force_apply = True
+
+        restored = Rule.from_dict(self.rule.to_dict())
+
+        self.assertTrue(restored.force_apply)
+
+    def test_existing_config_defaults_force_apply_off(self):
+        restored = Rule.from_dict({"name": "Legacy", "pattern": "legacy"})
+
+        self.assertFalse(restored.force_apply)
+
 
 if __name__ == "__main__":
     unittest.main()

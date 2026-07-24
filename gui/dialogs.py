@@ -505,6 +505,12 @@ class RuleEditDialog(QDialog):
 
         self._enabled_cb = QCheckBox("Rule enabled")
         self._enabled_cb.setChecked(True)
+        self._force_apply_cb = QCheckBox("Force apply continuously")
+        self._force_apply_cb.setToolTip(
+            "Continuously reapplies this rule at the configured enforcement interval.\n"
+            "This bypasses the normal 10-attempt limit and will overwrite manual\n"
+            "affinity or nice changes while the matching process is running."
+        )
 
         affinity_row = QHBoxLayout()
         affinity_row.addWidget(self._affinity_cb)
@@ -532,6 +538,7 @@ class RuleEditDialog(QDialog):
         form.addRow("I/O priority:", ionice_row)
 
         form.addRow("", self._enabled_cb)
+        form.addRow("", self._force_apply_cb)
         layout.addLayout(form)
 
         buttons = QDialogButtonBox(
@@ -564,6 +571,7 @@ class RuleEditDialog(QDialog):
                 if self._rule.ionice_level is not None:
                     self._ionice_level_spin.setValue(self._rule.ionice_level)
             self._enabled_cb.setChecked(self._rule.enabled)
+            self._force_apply_cb.setChecked(self._rule.force_apply)
 
     def _pick_affinity(self):
         """Open topology-aware CPU picker and store result in the display field."""
@@ -628,6 +636,7 @@ class RuleEditDialog(QDialog):
             ionice_class=ionice_class,
             ionice_level=ionice_level,
             enabled=self._enabled_cb.isChecked(),
+            force_apply=self._force_apply_cb.isChecked(),
         )
         if rule_id:
             r.rule_id = rule_id

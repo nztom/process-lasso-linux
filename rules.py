@@ -25,6 +25,7 @@ class Rule:
     ionice_class: Optional[int] = None
     ionice_level: Optional[int] = None
     enabled: bool = True
+    force_apply: bool = False
     _attempts_by_pid: dict[int, int] = field(
         default_factory=dict,
         repr=False,
@@ -43,6 +44,7 @@ class Rule:
             ionice_class=d.get("ionice_class"),
             ionice_level=d.get("ionice_level"),
             enabled=d.get("enabled", True),
+            force_apply=d.get("force_apply", False),
         )
 
     def to_dict(self) -> dict:
@@ -56,6 +58,7 @@ class Rule:
             "ionice_class": self.ionice_class,
             "ionice_level": self.ionice_level,
             "enabled": self.enabled,
+            "force_apply": self.force_apply,
         }
 
     def matches(self, proc_name: str) -> bool:
@@ -73,7 +76,7 @@ class Rule:
             return self.pattern.lower() in proc_name.lower()
 
     def can_apply(self, pid: int) -> bool:
-        return self._attempts_by_pid.get(pid, 0) < RULE_APPLY_ATTEMPTS
+        return self.force_apply or self._attempts_by_pid.get(pid, 0) < RULE_APPLY_ATTEMPTS
 
     def record_attempt(self, pid: int):
         self._attempts_by_pid[pid] = self._attempts_by_pid.get(pid, 0) + 1
@@ -145,7 +148,8 @@ class RuleEngine:
         for rule in self._rules:
             if not rule.matches(proc_name) or not rule.can_apply(pid):
                 continue
-            rule.record_attempt(pid)
+            if not rule.force_apply:
+                rule.record_attempt(pid)
             if rule.affinity is not None:
                 if utils.set_affinity(pid, rule.affinity):
                     msg = f"[Rule:{rule.name}] Set affinity={rule.affinity} on {proc_name}({pid})"

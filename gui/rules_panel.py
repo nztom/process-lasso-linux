@@ -29,7 +29,7 @@ class RulesPanel(QWidget):
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        COLS = ["Enabled", "Name", "Pattern", "Match", "Affinity", "Nice", "I/O Class", "I/O Lvl"]
+        COLS = ["Enabled", "Force", "Name", "Pattern", "Match", "Affinity", "Nice", "I/O Class", "I/O Lvl"]
         self._table = QTableWidget(0, len(COLS))
         self._table.setHorizontalHeaderLabels(COLS)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -37,8 +37,8 @@ class RulesPanel(QWidget):
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
         hdr = self._table.horizontalHeader()
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self._table.doubleClicked.connect(self._edit_selected)
         layout.addWidget(self._table)
 
@@ -68,6 +68,7 @@ class RulesPanel(QWidget):
         for row, rule in enumerate(rules):
             items = [
                 "Yes" if rule.enabled else "No",
+                "Yes" if rule.force_apply else "No",
                 rule.name,
                 rule.pattern,
                 rule.match_type,
