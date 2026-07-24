@@ -53,6 +53,15 @@ class ProcessTableTests(unittest.TestCase):
         table = ProcessTable(None, None)
         self.assertTrue(table.horizontalHeader().sectionsMovable())
 
+    def test_horizontal_scrolling_is_smooth(self):
+        table = ProcessTable(None, None)
+
+        self.assertEqual(
+            table.horizontalScrollMode(),
+            table.ScrollMode.ScrollPerPixel,
+        )
+        self.assertEqual(table.horizontalScrollBar().singleStep(), 24)
+
     def test_columns_use_stable_interactive_widths(self):
         table = ProcessTable(None, None)
         header = table.horizontalHeader()

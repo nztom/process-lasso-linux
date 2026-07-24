@@ -59,6 +59,8 @@ class ProcessTable(QTableWidget):
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.horizontalScrollBar().setSingleStep(24)
         self.setAlternatingRowColors(True)
         self.verticalHeader().setVisible(False)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
