@@ -22,7 +22,7 @@ class ProcessTable(QTableWidget):
     rule_add_requested = pyqtSignal(object)  # emits Rule
     rule_value_manually_changed = pyqtSignal(int)  # pid — stop its startup rule burst
 
-    COLUMNS = ["PID", "Name", "CPU%", "Mem(MB)", "Nice", "Affinity", "I/O", "Status"]
+    COLUMNS = ["PID", "Name", "User", "Sudo", "CPU%", "Mem(MB)", "Nice", "Affinity", "I/O", "Status"]
 
     def __init__(self, rule_engine, log_callback, parent=None):
         super().__init__(0, len(self.COLUMNS), parent)
@@ -30,7 +30,7 @@ class ProcessTable(QTableWidget):
         self._log_callback = log_callback
         self._snapshot: list[dict] = []
         self._throttled_pids: set[int] = set()
-        self._sort_col = 2   # CPU%
+        self._sort_col = 4   # CPU%
         self._sort_asc = False
         self._filter_text: str = ""
         self._col_visible: list[bool] = [True] * len(self.COLUMNS)
@@ -83,7 +83,7 @@ class ProcessTable(QTableWidget):
             self._sort_asc = not self._sort_asc
         else:
             self._sort_col = col
-            self._sort_asc = col not in (2, 3)  # CPU/Mem default desc
+            self._sort_asc = col not in (4, 5)  # CPU/Mem default desc
         self._update_header_labels()
         self._refresh_display()
 
@@ -103,12 +103,14 @@ class ProcessTable(QTableWidget):
         key_map = {
             0: lambda p: p["pid"],
             1: lambda p: p["name"].lower(),
-            2: lambda p: p["cpu_percent"],
-            3: lambda p: p["mem_rss"],
-            4: lambda p: p["nice"],
-            5: lambda p: p["affinity"],
-            6: lambda p: p["ionice"],
-            7: lambda p: "",
+            2: lambda p: p.get("user", "").lower(),
+            3: lambda p: p.get("sudo", False),
+            4: lambda p: p["cpu_percent"],
+            5: lambda p: p["mem_rss"],
+            6: lambda p: p["nice"],
+            7: lambda p: p["affinity"],
+            8: lambda p: p["ionice"],
+            9: lambda p: "",
         }
         key_fn = key_map.get(self._sort_col, lambda p: 0)
         try:
@@ -121,7 +123,9 @@ class ProcessTable(QTableWidget):
             ft = self._filter_text
             sorted_snap = [
                 p for p in sorted_snap
-                if ft in p["name"].lower() or ft in str(p["pid"])
+                if ft in p["name"].lower()
+                or ft in p.get("user", "").lower()
+                or ft in str(p["pid"])
             ]
 
         self.setRowCount(len(sorted_snap))
@@ -132,6 +136,8 @@ class ProcessTable(QTableWidget):
             items = [
                 str(pid),
                 proc["name"],
+                proc.get("user", ""),
+                "Yes" if proc.get("sudo", False) else "",
                 f"{cpu:.1f}",
                 f"{proc['mem_rss'] / 1_048_576:.1f}",
                 str(proc["nice"]),
@@ -155,7 +161,7 @@ class ProcessTable(QTableWidget):
             for col, text in enumerate(items):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-                if col in (2, 3, 4):
+                if col in (4, 5, 6):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
                 if col == 1 and cmdline:
                     item.setToolTip(cmdline)
@@ -170,9 +176,9 @@ class ProcessTable(QTableWidget):
         row = self.currentRow()
         pid_item = self.item(row, 0)
         name_item = self.item(row, 1)
-        nice_item = self.item(row, 4)
-        affinity_item = self.item(row, 5)
-        ionice_item = self.item(row, 6)
+        nice_item = self.item(row, 6)
+        affinity_item = self.item(row, 7)
+        ionice_item = self.item(row, 8)
         if not pid_item:
             return None
         return {

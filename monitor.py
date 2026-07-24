@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import pwd
 import time
 import logging
 
@@ -15,6 +16,45 @@ import utils
 log = logging.getLogger(__name__)
 
 
+_SUDO_OPTIONS_WITH_VALUE = {
+    "-C", "--close-from", "-D", "--chdir", "-g", "--group",
+    "-h", "--host", "-p", "--prompt", "-R", "--chroot",
+    "-T", "--command-timeout", "-u", "--user",
+}
+
+
+def _resolve_sudo_command(cmdline: list[str]) -> str:
+    """Return the command wrapped by sudo, or ``sudo`` if none is visible."""
+    args = list(cmdline[1:])
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            i += 1
+            break
+        if arg in _SUDO_OPTIONS_WITH_VALUE:
+            i += 2
+            continue
+        if arg.startswith("-"):
+            i += 1
+            continue
+        if "=" in arg and not arg.startswith(("/", "./", "../")):
+            i += 1
+            continue
+        break
+
+    # `sudo env KEY=value command` is a common way to pass a custom runtime
+    # environment. Show the command rather than the env utility.
+    if i < len(args) and os.path.basename(args[i]) == "env":
+        i += 1
+        while i < len(args) and (args[i].startswith("-") or "=" in args[i]):
+            i += 1
+
+    if i >= len(args):
+        return "sudo"
+    return os.path.basename(args[i].replace("\\", "/")) or "sudo"
+
+
 def _resolve_name(comm: str, cmdline: list[str]) -> str:
     """Return the best human-readable process name.
 
@@ -26,6 +66,8 @@ def _resolve_name(comm: str, cmdline: list[str]) -> str:
     """
     if cmdline:
         arg0 = cmdline[0]
+        if comm == "sudo" or os.path.basename(arg0) == "sudo":
+            return _resolve_sudo_command(cmdline)
         # Windows path: contains backslash and ends with .exe (case-insensitive)
         if "\\" in arg0 and arg0.lower().endswith(".exe"):
             basename = arg0.replace("\\", "/").rstrip("/").split("/")[-1]
@@ -51,6 +93,22 @@ def _safe_proc_info(proc: psutil.Process) -> dict | None:
             except (psutil.AccessDenied, psutil.ZombieProcess):
                 cmdline = []
             name = _resolve_name(comm, cmdline)
+            try:
+                username = pwd.getpwuid(proc.uids().effective).pw_name
+            except (psutil.AccessDenied, KeyError, AttributeError):
+                try:
+                    username = proc.username()
+                except (psutil.AccessDenied, KeyError):
+                    username = ""
+            sudo = comm == "sudo" or (
+                bool(cmdline) and os.path.basename(cmdline[0]) == "sudo"
+            )
+            if not sudo:
+                try:
+                    parent = proc.parent()
+                    sudo = parent is not None and parent.name() == "sudo"
+                except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+                    pass
             cpu = proc.cpu_percent()
             mem = proc.memory_info().rss
             try:
@@ -75,6 +133,8 @@ def _safe_proc_info(proc: psutil.Process) -> dict | None:
             return {
                 "pid": pid,
                 "name": name,
+                "user": username,
+                "sudo": sudo,
                 "cpu_percent": cpu,
                 "mem_rss": mem,
                 "nice": nice,
