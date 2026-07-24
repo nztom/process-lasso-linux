@@ -26,6 +26,19 @@ class ProcessTable(QTableWidget):
     SUDO_COLUMN = 3
     COMMAND_COLUMN = 10
     DEFAULT_HIDDEN_COLUMNS = {SUDO_COLUMN, COMMAND_COLUMN}
+    DEFAULT_COLUMN_WIDTHS = {
+        0: 72,    # PID
+        1: 220,   # Name
+        2: 100,   # User
+        3: 60,    # Sudo
+        4: 70,    # CPU%
+        5: 85,    # Mem(MB)
+        6: 60,    # Nice
+        7: 110,   # Affinity
+        8: 65,    # I/O
+        9: 110,   # Status
+        10: 360,  # Command
+    }
 
     def __init__(self, rule_engine, log_callback, parent=None):
         super().__init__(0, len(self.COLUMNS), parent)
@@ -51,13 +64,16 @@ class ProcessTable(QTableWidget):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
         hdr = self.horizontalHeader()
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hdr.setMinimumSectionSize(44)
+        hdr.setStretchLastSection(False)
         hdr.setSectionsClickable(True)
         hdr.setSectionsMovable(True)
         hdr.sectionClicked.connect(self._on_header_click)
         hdr.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         hdr.customContextMenuRequested.connect(self._show_header_menu)
         self.setSortingEnabled(False)  # Manual sorting
+        self._restore_default_column_widths()
 
     def _show_header_menu(self, pos):
         """Right-click on header — toggle column visibility."""
@@ -89,6 +105,13 @@ class ProcessTable(QTableWidget):
                 logical_index,
                 logical_index in self.DEFAULT_HIDDEN_COLUMNS,
             )
+        self._restore_default_column_widths()
+
+    def _restore_default_column_widths(self):
+        """Restore predictable widths without any auto-stretching sections."""
+        hdr = self.horizontalHeader()
+        for column, width in self.DEFAULT_COLUMN_WIDTHS.items():
+            hdr.resizeSection(column, width)
 
     def _update_header_labels(self):
         """Re-set header labels (called after sort to add/remove arrow indicators)."""

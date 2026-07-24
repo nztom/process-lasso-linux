@@ -53,12 +53,25 @@ class ProcessTableTests(unittest.TestCase):
         table = ProcessTable(None, None)
         self.assertTrue(table.horizontalHeader().sectionsMovable())
 
+    def test_columns_use_stable_interactive_widths(self):
+        table = ProcessTable(None, None)
+        header = table.horizontalHeader()
+
+        for column, width in table.DEFAULT_COLUMN_WIDTHS.items():
+            self.assertEqual(
+                header.sectionResizeMode(column),
+                header.ResizeMode.Interactive,
+            )
+            if column not in table.DEFAULT_HIDDEN_COLUMNS:
+                self.assertEqual(header.sectionSize(column), width)
+
     def test_reset_restores_default_order_and_visibility(self):
         table = ProcessTable(None, None)
         header = table.horizontalHeader()
         header.moveSection(header.visualIndex(2), 0)
         table.setColumnHidden(1, True)
         table.setColumnHidden(table.COMMAND_COLUMN, False)
+        header.resizeSection(1, 500)
 
         table._reset_column_layout()
 
@@ -71,6 +84,11 @@ class ProcessTableTests(unittest.TestCase):
                 table.isColumnHidden(column),
                 column in table.DEFAULT_HIDDEN_COLUMNS,
             )
+            if column not in table.DEFAULT_HIDDEN_COLUMNS:
+                self.assertEqual(
+                    header.sectionSize(column),
+                    table.DEFAULT_COLUMN_WIDTHS[column],
+                )
 
 
 if __name__ == "__main__":
