@@ -22,7 +22,8 @@ class ProcessTable(QTableWidget):
     rule_add_requested = pyqtSignal(object)  # emits Rule
     rule_value_manually_changed = pyqtSignal(int)  # pid — stop its startup rule burst
 
-    COLUMNS = ["PID", "Name", "User", "Sudo", "CPU%", "Mem(MB)", "Nice", "Affinity", "I/O", "Status"]
+    COLUMNS = ["PID", "Name", "User", "Sudo", "CPU%", "Mem(MB)", "Nice", "Affinity", "I/O", "Status", "Command"]
+    COMMAND_COLUMN = 10
 
     def __init__(self, rule_engine, log_callback, parent=None):
         super().__init__(0, len(self.COLUMNS), parent)
@@ -38,6 +39,7 @@ class ProcessTable(QTableWidget):
 
     def _setup(self):
         self.setHorizontalHeaderLabels(self.COLUMNS)
+        self.setColumnHidden(self.COMMAND_COLUMN, True)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -111,6 +113,7 @@ class ProcessTable(QTableWidget):
             7: lambda p: p["affinity"],
             8: lambda p: p["ionice"],
             9: lambda p: "",
+            10: lambda p: p.get("cmdline", "").lower(),
         }
         key_fn = key_map.get(self._sort_col, lambda p: 0)
         try:
@@ -144,6 +147,7 @@ class ProcessTable(QTableWidget):
                 proc.get("affinity", ""),
                 proc.get("ionice", ""),
                 "⏸ Throttled" if throttled else "",
+                proc.get("cmdline", ""),
             ]
             # Pick row text color based on CPU usage or throttle state
             if throttled:
