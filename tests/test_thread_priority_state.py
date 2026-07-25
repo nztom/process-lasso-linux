@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from rules import Rule, RuleEngine
+from rules import RULE_APPLY_ATTEMPTS, Rule, RuleEngine
 from thread_priority_state import ThreadPriorityState, parse_proc_stat_start_time
 
 
@@ -50,12 +50,70 @@ class OffsetApplicationTests(unittest.TestCase):
 
     @mock.patch("rules.thread_identity", side_effect=lambda p, t, r, b: f"boot:{p}:1:{t}:2:{r}")
     @mock.patch("rules.utils.set_nice_threads", side_effect=lambda tids, target: set(tids))
-    @mock.patch("rules.utils.get_thread_nice", return_value=10)
-    def test_applies_once_and_ignores_later_changes(self, get_nice, set_nice, identity):
+    @mock.patch("rules.utils.get_thread_nice", side_effect=[10, 5])
+    def test_applies_once_and_leaves_target_alone(self, get_nice, set_nice, identity):
         self.engine._apply_offset_threads(self.rule, 100, [101], "game")
         self.engine._apply_offset_threads(self.rule, 100, [101], "game")
         set_nice.assert_called_once_with([101], 5)
-        get_nice.assert_called_once_with(101)
+        self.assertEqual(get_nice.call_count, 2)
+
+    @mock.patch("rules.thread_identity", return_value="boot:100:1:101:2:rule")
+    @mock.patch("rules.utils.set_nice_threads", side_effect=lambda tids, target: set(tids))
+    @mock.patch("rules.utils.get_thread_nice", side_effect=[10, 10])
+    def test_restored_original_reapplies_offset(self, get_nice, set_nice, identity):
+        self.engine._apply_offset_threads(self.rule, 100, [101], "game")
+        self.engine._apply_offset_threads(self.rule, 100, [101], "game")
+
+        self.assertEqual(
+            set_nice.call_args_list,
+            [mock.call([101], 5), mock.call([101], 5)],
+        )
+        entry = self.state.get("boot:100:1:101:2:rule")
+        self.assertEqual(entry["original_nice"], 10)
+        self.assertEqual(entry["drift_attempts"], 1)
+
+    @mock.patch("rules.thread_identity", return_value="boot:100:1:101:2:rule")
+    @mock.patch("rules.utils.set_nice_threads", side_effect=lambda tids, target: set(tids))
+    @mock.patch("rules.utils.get_thread_nice", side_effect=[10, 8])
+    def test_third_value_becomes_new_offset_baseline(self, get_nice, set_nice, identity):
+        self.engine._apply_offset_threads(self.rule, 100, [101], "game")
+        self.engine._apply_offset_threads(self.rule, 100, [101], "game")
+
+        self.assertEqual(
+            set_nice.call_args_list,
+            [mock.call([101], 5), mock.call([101], 3)],
+        )
+        entry = self.state.get("boot:100:1:101:2:rule")
+        self.assertEqual(entry["original_nice"], 8)
+        self.assertEqual(entry["target_nice"], 3)
+        self.assertEqual(entry["original_source"], "rebased")
+
+    @mock.patch("rules.thread_identity", return_value="boot:100:1:101:2:rule")
+    @mock.patch("rules.utils.set_nice_threads", side_effect=lambda tids, target: set(tids))
+    @mock.patch("rules.utils.get_thread_nice", return_value=10)
+    def test_non_forced_offset_releases_after_ten_drift_corrections(
+        self, get_nice, set_nice, identity
+    ):
+        logs = []
+        self.engine.set_log_callback(logs.append)
+        for _ in range(15):
+            self.engine._apply_offset_threads(self.rule, 100, [101], "game")
+
+        self.assertEqual(set_nice.call_count, RULE_APPLY_ATTEMPTS + 1)
+        self.assertEqual(
+            len([message for message in logs if "Released nice drift" in message]),
+            1,
+        )
+
+    @mock.patch("rules.thread_identity", return_value="boot:100:1:101:2:rule")
+    @mock.patch("rules.utils.set_nice_threads", side_effect=lambda tids, target: set(tids))
+    @mock.patch("rules.utils.get_thread_nice", return_value=10)
+    def test_forced_offset_keeps_correcting_drift(self, get_nice, set_nice, identity):
+        self.rule.force_apply = True
+        for _ in range(RULE_APPLY_ATTEMPTS + 5):
+            self.engine._apply_offset_threads(self.rule, 100, [101], "game")
+
+        self.assertEqual(set_nice.call_count, RULE_APPLY_ATTEMPTS + 5)
 
     @mock.patch("rules.thread_identity", return_value="boot:100:1:102:3:rule")
     @mock.patch("rules.utils.set_nice_threads", side_effect=lambda tids, target: set(tids))

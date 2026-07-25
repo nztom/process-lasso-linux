@@ -399,7 +399,11 @@ class RuleEngine:
                     )
                     entry = self._priority_state.get(key)
                 inferred = None
-                original = self._priority_state.original_for_identity(key)
+                original = (
+                    int(entry["original_nice"])
+                    if entry is not None and "original_nice" in entry
+                    else self._priority_state.original_for_identity(key)
+                )
                 if original is None:
                     if original_nice_hint is not None:
                         original = original_nice_hint
@@ -409,18 +413,58 @@ class RuleEngine:
                             key, observed
                         )
                         original = inferred if inferred is not None else observed
-                target = max(rule.nice_floor, min(rule.nice_ceiling, original + rule.nice_offset))
-                same = entry is not None and entry.get("offset") == rule.nice_offset and entry.get("floor") == rule.nice_floor and entry.get("ceiling") == rule.nice_ceiling and entry.get("target_nice") == target
+                target = max(
+                    rule.nice_floor,
+                    min(rule.nice_ceiling, original + rule.nice_offset),
+                )
+                same = (
+                    entry is not None
+                    and entry.get("offset") == rule.nice_offset
+                    and entry.get("floor") == rule.nice_floor
+                    and entry.get("ceiling") == rule.nice_ceiling
+                    and entry.get("target_nice") == target
+                )
+                drift_attempts = int(entry.get("drift_attempts", 0)) if entry else 0
+                source = (
+                    "startup" if original_nice_hint is not None
+                    else "inherited_target" if inferred is not None else "observed"
+                )
                 if same and entry.get("status") == "applied":
-                    continue
+                    observed = utils.get_thread_nice(tid)
+                    if observed == target:
+                        continue
+                    if not rule.force_apply and drift_attempts >= RULE_APPLY_ATTEMPTS:
+                        if not entry.get("released_logged"):
+                            released = {**entry, "released_logged": True}
+                            self._priority_state.set_pending_many({key: released})
+                            self._priority_state.set_applied(key, target)
+                            self._log(
+                                f"[Rule:{rule.name}] Released nice drift on "
+                                f"{proc_name}({tid}) after "
+                                f"{RULE_APPLY_ATTEMPTS} corrections"
+                            )
+                        continue
+                    drift_attempts += 1
+                    if observed != original:
+                        # A third value is a new application/external baseline.
+                        # Persist it before applying our offset so it cannot
+                        # compound after a crash or restart.
+                        self._priority_state.replace_original_for_identity(
+                            key, observed
+                        )
+                        original = observed
+                        source = "rebased"
+                        target = max(
+                            rule.nice_floor,
+                            min(rule.nice_ceiling, original + rule.nice_offset),
+                        )
+                    else:
+                        source = "restored_baseline"
                 pending[key] = {
                     "original_nice": original, "offset": rule.nice_offset,
-                    "original_source": (
-                        "startup" if original_nice_hint is not None
-                        else "inherited_target" if inferred is not None else "observed"
-                    ),
+                    "original_source": source,
                     "floor": rule.nice_floor, "ceiling": rule.nice_ceiling,
-                    "target_nice": target,
+                    "target_nice": target, "drift_attempts": drift_attempts,
                 }
                 groups.setdefault(target, []).append((tid, key))
             except (OSError, ValueError, ProcessLookupError):
@@ -470,7 +514,14 @@ class RuleEngine:
                     msg = f"[Rule:{rule.name}] Set ionice class={rule.ionice_class} level={rule.ionice_level} on {proc_name}({pid})"
                     self._log(msg)
                     actions.append(msg)
-        if nice_rule and nice_rule.nice_mode == "offset" and self._can_apply(nice_rule, pid):
+        if (
+            nice_rule
+            and nice_rule.nice_mode == "offset"
+            and (
+                nice_rule.force_apply
+                or (nice_rule.rule_id, pid) not in self._suppressed_rule_pids
+            )
+        ):
             actions.extend(self._apply_offset_threads(
                 nice_rule, pid, utils.get_process_tids(pid), proc_name,
                 original_nice_hint,
@@ -511,8 +562,14 @@ class RuleEngine:
                     )
                     self._log(msg)
                     actions.append(msg)
-        if (nice_rule and nice_rule.nice_mode == "offset"
-                and (nice_rule.rule_id, pid) not in self._suppressed_rule_pids):
+        if (
+            nice_rule
+            and nice_rule.nice_mode == "offset"
+            and (
+                nice_rule.force_apply
+                or (nice_rule.rule_id, pid) not in self._suppressed_rule_pids
+            )
+        ):
             actions.extend(self._apply_offset_threads(nice_rule, pid, [tid], proc_name))
         self._priority_state.flush_if_due()
         return actions
