@@ -12,6 +12,10 @@ import utils
 
 
 class SetNiceTests(unittest.TestCase):
+    @mock.patch("utils.os.listdir", side_effect=FileNotFoundError)
+    def test_missing_process_has_no_threads(self, listdir):
+        self.assertEqual(utils.get_process_tids(1234), [])
+
     @mock.patch("nice_helper.set_negative_nice", return_value=True)
     @mock.patch("utils.subprocess.run")
     def test_negative_nice_uses_privileged_helper(self, run, helper):
@@ -29,7 +33,7 @@ class SetNiceTests(unittest.TestCase):
         run.assert_not_called()
 
     @mock.patch("utils.subprocess.run")
-    @mock.patch("utils._get_tids", return_value=[1234, 1235])
+    @mock.patch("utils.get_process_tids", return_value=[1234, 1235])
     def test_non_negative_nice_sets_all_threads_unprivileged(self, get_tids, run):
         run.return_value.returncode = 0
 

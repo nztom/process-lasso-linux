@@ -5,16 +5,11 @@ import logging
 import os
 import subprocess
 
+import utils
+
 log = logging.getLogger(__name__)
 
 HELPER = "/usr/local/bin/process-lasso-sysfs"
-
-
-def _get_tids(pid: int) -> list[int]:
-    try:
-        return [int(tid) for tid in os.listdir(f"/proc/{pid}/task")]
-    except OSError:
-        return []
 
 
 def set_negative_nice(pid: int, nice: int) -> bool:
@@ -23,7 +18,7 @@ def set_negative_nice(pid: int, nice: int) -> bool:
         log.warning("invalid privileged renice request: pid=%d nice=%d", pid, nice)
         return False
 
-    tids = _get_tids(pid)
+    tids = utils.get_process_tids(pid)
     if not tids:
         return False
 

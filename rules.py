@@ -26,11 +26,6 @@ class Rule:
     ionice_level: Optional[int] = None
     enabled: bool = True
     force_apply: bool = False
-    _attempts_by_pid: dict[int, int] = field(
-        default_factory=dict,
-        repr=False,
-        compare=False,
-    )
 
     @classmethod
     def from_dict(cls, d: dict) -> "Rule":
@@ -75,27 +70,12 @@ class Rule:
         else:  # contains
             return self.pattern.lower() in proc_name.lower()
 
-    def can_apply(self, pid: int) -> bool:
-        return self.force_apply or self._attempts_by_pid.get(pid, 0) < RULE_APPLY_ATTEMPTS
-
-    def record_attempt(self, pid: int):
-        self._attempts_by_pid[pid] = self._attempts_by_pid.get(pid, 0) + 1
-
-    def forget_pid(self, pid: int):
-        self._attempts_by_pid.pop(pid, None)
-
-    def suppress_pid(self, pid: int):
-        self._attempts_by_pid[pid] = RULE_APPLY_ATTEMPTS
-
-    def reset_attempts(self):
-        self._attempts_by_pid.clear()
-
-
 class RuleEngine:
     """Holds the list of rules and applies them to processes."""
 
     def __init__(self):
         self._rules: list[Rule] = []
+        self._attempts_by_rule: dict[str, dict[int, int]] = {}
         self._log_callback = None  # callable(str) for UI log
 
     def set_log_callback(self, cb):
@@ -108,6 +88,7 @@ class RuleEngine:
 
     def load_rules(self, rules_list: list[dict]):
         self._rules = [Rule.from_dict(r) for r in rules_list]
+        self._attempts_by_rule.clear()
 
     def get_rules(self) -> list[Rule]:
         return list(self._rules)
@@ -117,9 +98,10 @@ class RuleEngine:
 
     def remove_rule(self, rule_id: str):
         self._rules = [r for r in self._rules if r.rule_id != rule_id]
+        self._attempts_by_rule.pop(rule_id, None)
 
     def update_rule(self, rule: Rule):
-        rule.reset_attempts()
+        self._attempts_by_rule.pop(rule.rule_id, None)
         for i, r in enumerate(self._rules):
             if r.rule_id == rule.rule_id:
                 self._rules[i] = rule
@@ -159,22 +141,30 @@ class RuleEngine:
 
     def forget_pid(self, pid: int):
         """Discard runtime attempt state after a process exits."""
-        for rule in self._rules:
-            rule.forget_pid(pid)
+        for attempts in self._attempts_by_rule.values():
+            attempts.pop(pid, None)
 
     def suppress_pid(self, pid: int):
         """Stop all current rules from overriding a manual process change."""
         for rule in self._rules:
-            rule.suppress_pid(pid)
+            self._attempts_by_rule.setdefault(rule.rule_id, {})[pid] = RULE_APPLY_ATTEMPTS
+
+    def _can_apply(self, rule: Rule, pid: int) -> bool:
+        attempts = self._attempts_by_rule.get(rule.rule_id, {})
+        return rule.force_apply or attempts.get(pid, 0) < RULE_APPLY_ATTEMPTS
+
+    def _record_attempt(self, rule: Rule, pid: int):
+        attempts = self._attempts_by_rule.setdefault(rule.rule_id, {})
+        attempts[pid] = attempts.get(pid, 0) + 1
 
     def apply_to_process(self, pid: int, proc_name: str) -> list[str]:
         """Apply all matching rules to a process. Returns list of action strings."""
         actions = []
         for rule in self._rules:
-            if not rule.matches(proc_name) or not rule.can_apply(pid):
+            if not rule.matches(proc_name) or not self._can_apply(rule, pid):
                 continue
             if not rule.force_apply:
-                rule.record_attempt(pid)
+                self._record_attempt(rule, pid)
             if rule.affinity is not None:
                 if utils.set_affinity(pid, rule.affinity):
                     msg = f"[Rule:{rule.name}] Set affinity={rule.affinity} on {proc_name}({pid})"

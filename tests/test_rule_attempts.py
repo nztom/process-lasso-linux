@@ -72,7 +72,8 @@ class RuleAttemptTests(unittest.TestCase):
         set_affinity.assert_called_with(100, "4-7")
 
     def test_attempt_state_is_not_serialized(self):
-        self.rule.record_attempt(100)
+        self.engine.apply_to_process(100, "game.exe")
+        self.assertNotIn("_attempts_by_pid", vars(self.rule))
         self.assertNotIn("_attempts_by_pid", self.rule.to_dict())
 
     @mock.patch("rules.utils.set_affinity", return_value=True)

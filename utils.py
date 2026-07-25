@@ -8,7 +8,7 @@ import logging
 log = logging.getLogger(__name__)
 
 
-def _get_tids(pid: int) -> list[int]:
+def get_process_tids(pid: int) -> list[int]:
     """Return all thread IDs for a process (including the main thread).
     Games like attila.exe have 70+ threads each with their own Linux TID.
     Setting affinity on only the main PID leaves all other threads unrestricted."""
@@ -16,7 +16,7 @@ def _get_tids(pid: int) -> list[int]:
     try:
         return [int(t) for t in os.listdir(task_dir)]
     except OSError:
-        return [pid]
+        return []
 
 
 def cpulist_to_set(cpulist: str) -> set[int]:
@@ -47,7 +47,7 @@ def set_affinity(pid: int, cpulist: str) -> bool:
         log.warning("set_affinity: bad cpulist %r: %s", cpulist, e)
         return False
 
-    tids = _get_tids(pid)
+    tids = get_process_tids(pid)
     any_ok = False
     for tid in tids:
         try:
@@ -98,7 +98,7 @@ def set_nice(pid: int, nice: int) -> bool:
 
         return nice_helper.set_negative_nice(pid, nice)
 
-    tids = _get_tids(pid)
+    tids = get_process_tids(pid)
     if not tids:
         return False
     try:

@@ -1,9 +1,7 @@
 """Dialogs for setting affinity, nice priority, and ionice priority."""
 from __future__ import annotations
 
-import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -429,7 +427,6 @@ class ProcessPickerDialog(QDialog):
                     except Exception:
                         cmdline = []
                     # Use same Wine name resolution as monitor
-                    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
                     from monitor import _resolve_name
                     name = _resolve_name(name, cmdline)
                     cpu = proc.cpu_percent()
@@ -650,7 +647,6 @@ class RuleEditDialog(QDialog):
     def get_rule(self):
         """Return Rule built from dialog values."""
         import sys, os
-        sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
         from rules import Rule
 
         rule_id = self._rule.rule_id if self._rule else None

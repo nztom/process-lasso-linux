@@ -11,6 +11,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from rules import RuleEngine
 from probalance import ProBalance
+from process_info import ProcessInfo
 import utils
 
 log = logging.getLogger(__name__)
@@ -82,11 +83,12 @@ def _resolve_name(comm: str, cmdline: list[str]) -> str:
     return comm
 
 
-def _safe_proc_identity(proc: psutil.Process) -> dict | None:
+def _safe_proc_identity(proc: psutil.Process) -> ProcessInfo | None:
     """Collect cacheable process identity fields once per PID."""
     try:
         with proc.oneshot():
             pid = proc.pid
+            create_time = proc.create_time()
             comm = proc.name()
             try:
                 cmdline = proc.cmdline()
@@ -115,6 +117,7 @@ def _safe_proc_identity(proc: psutil.Process) -> dict | None:
                 nice = 0
             return {
                 "pid": pid,
+                "create_time": create_time,
                 "comm": comm,
                 "name": name,
                 "user": username,
@@ -132,7 +135,7 @@ def _safe_proc_identity(proc: psutil.Process) -> dict | None:
 
 def _update_proc_metrics(
     proc: psutil.Process,
-    info: dict,
+    info: ProcessInfo,
     *,
     include_details: bool,
 ) -> bool:
@@ -161,7 +164,7 @@ def _update_proc_metrics(
         return False
 
 
-def _safe_proc_info(proc: psutil.Process) -> dict | None:
+def _safe_proc_info(proc: psutil.Process) -> ProcessInfo | None:
     """Collect a complete process record for callers outside the monitor."""
     info = _safe_proc_identity(proc)
     if info is None or not _update_proc_metrics(proc, info, include_details=True):
@@ -189,7 +192,7 @@ class MonitorThread(QThread):
         self._config = config
         self._stop = False
         self._known_pids: set[int] = set()
-        self._process_cache: dict[int, dict] = {}
+        self._process_cache: dict[int, ProcessInfo] = {}
 
         # Track original affinity before we change it, for "Reset All" function.
         # pid → frozenset of CPU numbers that were online when we first touched the process.
@@ -275,7 +278,7 @@ class MonitorThread(QThread):
                 mask = orig if orig else all_cpus
                 os.sched_setaffinity(pid, mask)
                 # Restore all threads too
-                for tid in utils._get_tids(pid):
+                for tid in utils.get_process_tids(pid):
                     try:
                         os.sched_setaffinity(tid, mask)
                     except OSError:
@@ -295,7 +298,19 @@ class MonitorThread(QThread):
         except (ProcessLookupError, PermissionError, OSError):
             pass
 
-    def _apply_new_pid(self, info: dict):
+    def _forget_process(self, pid: int):
+        """Clear all runtime state associated with one process identity."""
+        self._rule_engine.forget_pid(pid)
+        self._probalance.forget_pid(pid)
+        self._process_cache.pop(pid, None)
+        self._original_affinities.pop(pid, None)
+        self._gaming_niced.pop(pid, None)
+
+    def _snapshot_records(self) -> list[ProcessInfo]:
+        """Return records detached from the worker-owned mutable cache."""
+        return [dict(info) for info in self._process_cache.values()]
+
+    def _apply_new_pid(self, info: ProcessInfo):
         """Apply rules or default affinity to a newly seen process."""
         pid = info["pid"]
         name = info["name"]
@@ -341,7 +356,11 @@ class MonitorThread(QThread):
                     self._apply_new_pid(refreshed)
                 continue
             try:
-                if by_pid[pid].name() != info.get("comm"):
+                pid_reused = by_pid[pid].create_time() != info.get("create_time")
+                command_changed = by_pid[pid].name() != info.get("comm")
+                if pid_reused:
+                    self._forget_process(pid)
+                if pid_reused or command_changed:
                     refreshed = _safe_proc_identity(by_pid[pid])
                     if refreshed is not None:
                         self._process_cache[pid] = refreshed
@@ -350,8 +369,7 @@ class MonitorThread(QThread):
                 pass
 
         for pid in exited_pids:
-            self._rule_engine.forget_pid(pid)
-            self._process_cache.pop(pid, None)
+            self._forget_process(pid)
 
         self._known_pids = current_pids
         return by_pid
@@ -402,7 +420,9 @@ class MonitorThread(QThread):
                     proc = by_pid.get(pid)
                     if proc is not None:
                         _update_proc_metrics(proc, info, include_details=snapshot_due)
-            snapshot = list(self._process_cache.values())
+            # The GUI receives these across a queued signal. Copy nested
+            # records so later worker updates cannot mutate UI-owned data.
+            snapshot = self._snapshot_records()
 
             # ProBalance every 1.0s
             if pb_due:

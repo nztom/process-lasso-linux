@@ -1,9 +1,7 @@
 """Process table widget with live data and right-click context menu."""
 from __future__ import annotations
 
-import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QAbstractItemView,
@@ -13,6 +11,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence
 
 import utils
+from process_info import ProcessInfo
 from gui.dialogs import AffinityDialog, NicePriorityDialog, IoNiceDialog, RuleEditDialog
 
 
@@ -61,7 +60,7 @@ class ProcessTable(QTableWidget):
         super().__init__(0, len(self.COLUMNS), parent)
         self._rule_engine = rule_engine
         self._log_callback = log_callback
-        self._snapshot: list[dict] = []
+        self._snapshot: list[ProcessInfo] = []
         self._throttled_pids: set[int] = set()
         self._sort_col = 4   # CPU%
         self._sort_asc = False
@@ -157,7 +156,7 @@ class ProcessTable(QTableWidget):
     def update_throttled(self, throttled_pids: set[int]):
         self._throttled_pids = throttled_pids
 
-    def update_snapshot(self, snapshot: list[dict]):
+    def update_snapshot(self, snapshot: list[ProcessInfo]):
         self._snapshot = snapshot
         users = sorted(
             {proc.get("user", "") for proc in snapshot if proc.get("user", "")},

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import utils
+from process_info import ProcessInfo
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +35,10 @@ class ProBalance:
     def set_log_callback(self, cb):
         self._log_callback = cb
 
+    def forget_pid(self, pid: int):
+        """Discard runtime state when a process exits or its PID is reused."""
+        self._states.pop(pid, None)
+
     def _log(self, msg: str):
         log.info(msg)
         if self._log_callback:
@@ -44,7 +49,7 @@ class ProBalance:
         name_lower = name.lower()
         return any(p.lower() in name_lower for p in patterns)
 
-    def tick(self, snapshot: list[dict], tick_seconds: float):
+    def tick(self, snapshot: list[ProcessInfo], tick_seconds: float):
         """
         Called every ProBalance update interval.
         snapshot: list of dicts with keys: pid, name, cpu_percent, nice
