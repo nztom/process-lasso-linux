@@ -15,6 +15,7 @@ from PyQt6.QtGui import QColor, QKeySequence
 import utils
 from process_info import ProcessInfo
 from gui.dialogs import AffinityDialog, NicePriorityDialog, IoNiceDialog, RuleEditDialog
+from gui.table_layout import configure_columns, reset_columns
 
 
 def _read_threads(pid: int) -> list[dict]:
@@ -104,24 +105,21 @@ class ProcessTable(QTableWidget):
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self.horizontalScrollBar().setSingleStep(24)
         self.setAlternatingRowColors(True)
         self.verticalHeader().setVisible(False)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
         self.cellDoubleClicked.connect(self._toggle_threads_for_row)
         hdr = self.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        hdr.setMinimumSectionSize(44)
-        hdr.setStretchLastSection(False)
-        hdr.setSectionsClickable(True)
-        hdr.setSectionsMovable(True)
+        configure_columns(
+            self,
+            self.DEFAULT_COLUMN_WIDTHS,
+            hidden=self.DEFAULT_HIDDEN_COLUMNS,
+        )
         hdr.sectionClicked.connect(self._on_header_click)
         hdr.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         hdr.customContextMenuRequested.connect(self._show_header_menu)
         self.setSortingEnabled(False)  # Manual sorting
-        self._restore_default_column_widths()
 
     def _show_header_menu(self, pos):
         """Right-click on header — toggle column visibility."""
@@ -144,22 +142,16 @@ class ProcessTable(QTableWidget):
 
     def _reset_column_layout(self):
         """Restore default column order and visibility."""
-        hdr = self.horizontalHeader()
-        for logical_index in range(len(self.COLUMNS)):
-            current_visual_index = hdr.visualIndex(logical_index)
-            if current_visual_index != logical_index:
-                hdr.moveSection(current_visual_index, logical_index)
-            hdr.setSectionHidden(
-                logical_index,
-                logical_index in self.DEFAULT_HIDDEN_COLUMNS,
-            )
-        self._restore_default_column_widths()
+        reset_columns(
+            self,
+            self.DEFAULT_COLUMN_WIDTHS,
+            hidden=self.DEFAULT_HIDDEN_COLUMNS,
+        )
 
     def _restore_default_column_widths(self):
         """Restore predictable widths without any auto-stretching sections."""
-        hdr = self.horizontalHeader()
         for column, width in self.DEFAULT_COLUMN_WIDTHS.items():
-            hdr.resizeSection(column, width)
+            self.horizontalHeader().resizeSection(column, width)
 
     def _update_header_labels(self):
         """Re-set header labels (called after sort to add/remove arrow indicators)."""

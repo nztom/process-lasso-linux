@@ -4,17 +4,32 @@ from __future__ import annotations
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTableWidget, QTableWidgetItem, QAbstractItemView,
-    QHeaderView, QMessageBox, QFileDialog,
+    QHeaderView, QMessageBox, QFileDialog, QMenu,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 import json
 
 from rules import RuleEngine, Rule
 from gui.dialogs import RuleEditDialog
-
-
+from gui.table_layout import configure_columns, reset_columns
 class RulesPanel(QWidget):
     rules_changed = pyqtSignal()  # emit when rules list changes
+
+    COLUMNS = [
+        "Enabled", "Force", "Name", "Pattern", "Match",
+        "CPU Affinity", "CPU Priority", "I/O Class", "I/O Lvl",
+    ]
+    DEFAULT_COLUMN_WIDTHS = {
+        0: 80,
+        1: 70,
+        2: 220,
+        3: 220,
+        4: 90,
+        5: 130,
+        6: 125,
+        7: 95,
+        8: 80,
+    }
 
     def __init__(self, rule_engine: RuleEngine, parent=None):
         super().__init__(parent)
@@ -25,16 +40,16 @@ class RulesPanel(QWidget):
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        COLS = ["Enabled", "Force", "Name", "Pattern", "Match", "CPU Affinity", "CPU Priority", "I/O Class", "I/O Lvl"]
-        self._table = QTableWidget(0, len(COLS))
-        self._table.setHorizontalHeaderLabels(COLS)
+        self._table = QTableWidget(0, len(self.COLUMNS))
+        self._table.setHorizontalHeaderLabels(self.COLUMNS)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
         hdr = self._table.horizontalHeader()
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        configure_columns(self._table, self.DEFAULT_COLUMN_WIDTHS)
+        hdr.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        hdr.customContextMenuRequested.connect(self._show_header_menu)
         self._table.doubleClicked.connect(self._edit_selected)
         layout.addWidget(self._table)
 
@@ -57,6 +72,27 @@ class RulesPanel(QWidget):
             btn_row.addWidget(b)
         btn_row.addStretch()
         layout.addLayout(btn_row)
+
+    def _show_header_menu(self, pos):
+        """Right-click on the header to toggle or reset rule columns."""
+        header = self._table.horizontalHeader()
+        menu = QMenu(self)
+        for column, name in enumerate(self.COLUMNS):
+            action = menu.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(not header.isSectionHidden(column))
+            action.setData(column)
+        menu.addSeparator()
+        reset_action = menu.addAction("Reset columns to default")
+        chosen = menu.exec(header.mapToGlobal(pos))
+        if chosen == reset_action:
+            self._reset_column_layout()
+        elif chosen:
+            column = chosen.data()
+            header.setSectionHidden(column, not header.isSectionHidden(column))
+
+    def _reset_column_layout(self):
+        reset_columns(self._table, self.DEFAULT_COLUMN_WIDTHS)
 
     def refresh(self):
         rules = self._engine.get_rules()
