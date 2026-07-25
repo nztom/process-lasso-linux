@@ -20,8 +20,6 @@ A KDE/Linux process manager inspired by Windows Process Lasso. Built with Python
 
 ## Why it beats Windows Process Lasso on X3D / Hybrid CPUs
 
-Windows Process Lasso uses `SetThreadAffinityMask` to restrict existing threads to a subset of cores. The problem is that threads are already scheduled and thread-pool sizes are already fixed — forcing them onto fewer cores creates scheduling contention and frametime jitter that shows up as stutters in CPU-bound games.
-
 Process Lasso for Linux uses `sysfs` CPU parking (`/sys/devices/system/cpu/cpuN/online`). Writing `0` physically removes non-preferred CPUs from the kernel scheduler **before your game ever launches**. Every process — including the game, its thread pools, and the OS itself — sees only the preferred cores from the start. Thread-pool sizing is correct, there is no competition for runqueues, and frametime variance drops measurably. This is the same technique used by `gamemoderun` on AMD X3D and Intel Hybrid platforms.
 
 ---

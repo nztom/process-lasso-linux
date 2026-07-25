@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import os
 
+import psutil
+
 from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QAbstractItemView,
-    QMenu, QHeaderView, QMessageBox, QApplication,
+    QMenu, QHeaderView, QMessageBox, QApplication, QStyle,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence
@@ -13,6 +15,28 @@ from PyQt6.QtGui import QColor, QKeySequence
 import utils
 from process_info import ProcessInfo
 from gui.dialogs import AffinityDialog, NicePriorityDialog, IoNiceDialog, RuleEditDialog
+
+
+def _read_threads(pid: int) -> list[dict]:
+    """Read display details for the threads currently owned by ``pid``."""
+    threads = []
+    for tid in sorted(utils.get_process_tids(pid)):
+        try:
+            with open(f"/proc/{pid}/task/{tid}/comm") as comm_file:
+                name = comm_file.read().strip()
+            thread = psutil.Process(tid)
+            affinity = utils._cpuset_to_cpulist(set(thread.cpu_affinity()))
+            ionice = thread.ionice()
+            threads.append({
+                "tid": tid,
+                "name": name or str(tid),
+                "nice": thread.nice(),
+                "affinity": affinity,
+                "ionice": f"{ionice.ioclass}/{ionice.value}",
+            })
+        except (OSError, psutil.Error):
+            continue
+    return threads
 
 
 class ProcessTable(QTableWidget):
@@ -56,7 +80,7 @@ class ProcessTable(QTableWidget):
         13: 360,  # Command
     }
 
-    def __init__(self, rule_engine, log_callback, parent=None):
+    def __init__(self, rule_engine, log_callback, parent=None, thread_provider=None):
         super().__init__(0, len(self.COLUMNS), parent)
         self._rule_engine = rule_engine
         self._log_callback = log_callback
@@ -68,6 +92,8 @@ class ProcessTable(QTableWidget):
         self._user_filter: str = ""
         self._hide_root: bool = True
         self._available_users: list[str] = []
+        self._expanded_pids: set[int] = set()
+        self._thread_provider = thread_provider or _read_threads
         self._col_visible: list[bool] = [True] * len(self.COLUMNS)
         self._setup()
 
@@ -84,6 +110,7 @@ class ProcessTable(QTableWidget):
         self.verticalHeader().setVisible(False)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
+        self.cellDoubleClicked.connect(self._toggle_threads_for_row)
         hdr = self.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hdr.setMinimumSectionSize(44)
@@ -158,6 +185,7 @@ class ProcessTable(QTableWidget):
 
     def update_snapshot(self, snapshot: list[ProcessInfo]):
         self._snapshot = snapshot
+        self._expanded_pids.intersection_update(proc["pid"] for proc in snapshot)
         users = sorted(
             {proc.get("user", "") for proc in snapshot if proc.get("user", "")},
             key=str.casefold,
@@ -229,8 +257,16 @@ class ProcessTable(QTableWidget):
                 or ft in str(p["pid"])
             ]
 
-        self.setRowCount(len(sorted_snap))
-        for row, proc in enumerate(sorted_snap):
+        threads_by_pid = {
+            proc["pid"]: self._thread_provider(proc["pid"])
+            for proc in sorted_snap
+            if proc["pid"] in self._expanded_pids
+        }
+        self.setRowCount(
+            len(sorted_snap) + sum(len(threads) for threads in threads_by_pid.values())
+        )
+        row = 0
+        for proc in sorted_snap:
             pid = proc["pid"]
             cpu = proc["cpu_percent"]
             throttled = pid in self._throttled_pids
@@ -267,11 +303,66 @@ class ProcessTable(QTableWidget):
             for col, text in enumerate(items):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+                item.setData(Qt.ItemDataRole.UserRole, "process")
                 if col == 1 and cmdline:
                     item.setToolTip(cmdline)
+                if col == 0:
+                    arrow = (
+                        QStyle.StandardPixmap.SP_ArrowDown
+                        if pid in self._expanded_pids
+                        else QStyle.StandardPixmap.SP_ArrowRight
+                    )
+                    item.setIcon(self.style().standardIcon(arrow))
+                    hint = (
+                        "Double-click to collapse threads"
+                        if pid in self._expanded_pids
+                        else "Double-click to expand threads"
+                    )
+                    item.setToolTip(hint)
                 if row_color is not None:
                     item.setForeground(row_color)
                 self.setItem(row, col, item)
+            row += 1
+            for thread in threads_by_pid.get(pid, []):
+                self._render_thread_row(row, proc, thread)
+                row += 1
+
+    def _render_thread_row(self, row: int, proc: ProcessInfo, thread: dict):
+        """Render a display-only child row beneath its owning process."""
+        items = [
+            str(thread["tid"]),
+            f"    ↳ {thread['name']}",
+            proc.get("user", ""),
+            "", "", "",
+            str(thread.get("nice", "")),
+            "",
+            thread.get("affinity", ""),
+            "",
+            thread.get("ionice", ""),
+            "",
+            "Thread",
+            f"Thread of {proc['name']} ({proc['pid']})",
+        ]
+        for column, text in enumerate(items):
+            item = QTableWidgetItem(text)
+            item.setTextAlignment(
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+            )
+            item.setData(Qt.ItemDataRole.UserRole, "thread")
+            item.setData(Qt.ItemDataRole.UserRole + 1, proc["pid"])
+            item.setForeground(QColor("#8b949e"))
+            self.setItem(row, column, item)
+
+    def _toggle_threads_for_row(self, row: int, _column: int):
+        pid_item = self.item(row, 0)
+        if pid_item is None or pid_item.data(Qt.ItemDataRole.UserRole) != "process":
+            return
+        pid = int(pid_item.text())
+        if pid in self._expanded_pids:
+            self._expanded_pids.remove(pid)
+        else:
+            self._expanded_pids.add(pid)
+        self._refresh_display()
 
     @staticmethod
     def _format_nice(value) -> str:
@@ -315,7 +406,7 @@ class ProcessTable(QTableWidget):
         nice_item = self.item(row, self.NICE_CURRENT_COLUMN)
         affinity_item = self.item(row, self.AFFINITY_CURRENT_COLUMN)
         ionice_item = self.item(row, self.IONICE_CURRENT_COLUMN)
-        if not pid_item:
+        if not pid_item or pid_item.data(Qt.ItemDataRole.UserRole) != "process":
             return None
         return {
             "pid": int(pid_item.text()),
@@ -332,7 +423,7 @@ class ProcessTable(QTableWidget):
         for row in selected_rows:
             pid_item = self.item(row, 0)
             name_item = self.item(row, 1)
-            if not pid_item:
+            if not pid_item or pid_item.data(Qt.ItemDataRole.UserRole) != "process":
                 continue
             procs.append({
                 "pid": int(pid_item.text()),

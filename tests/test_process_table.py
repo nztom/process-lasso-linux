@@ -207,6 +207,82 @@ class ProcessTableTests(unittest.TestCase):
         self.assertEqual(table.rowCount(), 1)
         self.assertEqual(table.item(0, 2).text(), "bob")
 
+    def test_process_row_expands_to_display_its_threads(self):
+        threads = [{
+            "tid": 101,
+            "name": "worker",
+            "nice": 5,
+            "affinity": "0-1",
+            "ionice": "2/4",
+        }]
+        table = ProcessTable(None, None, thread_provider=lambda pid: threads)
+        table.set_hide_root(False)
+        table.update_snapshot([self._process(100, "server", "user")])
+
+        table._toggle_threads_for_row(0, 1)
+
+        self.assertEqual(table.rowCount(), 2)
+        self.assertEqual(table.item(1, 0).text(), "101")
+        self.assertEqual(table.item(1, 1).text().strip(), "↳ worker")
+        self.assertEqual(table.item(1, table.NICE_CURRENT_COLUMN).text(), "5")
+        self.assertEqual(table.item(1, table.AFFINITY_CURRENT_COLUMN).text(), "0-1")
+        self.assertEqual(table.item(1, table.STATUS_COLUMN).text(), "Thread")
+
+    def test_expand_arrow_is_on_pid_cell_only(self):
+        table = ProcessTable(None, None, thread_provider=lambda pid: [])
+        table.set_hide_root(False)
+        table.update_snapshot([self._process(100, "server", "user")])
+
+        self.assertFalse(table.item(0, 0).icon().isNull())
+        self.assertTrue(table.item(0, 1).icon().isNull())
+
+    def test_thread_expansion_persists_across_snapshots_and_collapses(self):
+        calls = []
+
+        def threads(pid):
+            calls.append(pid)
+            return [{
+                "tid": 101, "name": "worker", "nice": 0,
+                "affinity": "0-3", "ionice": "2/4",
+            }]
+
+        table = ProcessTable(None, None, thread_provider=threads)
+        table.set_hide_root(False)
+        snapshot = [self._process(100, "server", "user")]
+        table.update_snapshot(snapshot)
+        table._toggle_threads_for_row(0, 1)
+        table.update_snapshot(snapshot)
+
+        self.assertEqual(table.rowCount(), 2)
+        self.assertEqual(calls, [100, 100])
+
+        table._toggle_threads_for_row(0, 1)
+        self.assertEqual(table.rowCount(), 1)
+
+    def test_thread_rows_are_excluded_from_process_actions(self):
+        thread = {
+            "tid": 101, "name": "worker", "nice": 0,
+            "affinity": "0-3", "ionice": "2/4",
+        }
+        table = ProcessTable(None, None, thread_provider=lambda pid: [thread])
+        table.set_hide_root(False)
+        table.update_snapshot([self._process(100, "server", "user")])
+        table._toggle_threads_for_row(0, 1)
+        table.setCurrentCell(1, 0)
+        table.selectRow(1)
+
+        self.assertIsNone(table._selected_proc())
+        self.assertEqual(table._selected_procs(), [])
+
+    def test_expansion_is_forgotten_when_process_exits(self):
+        table = ProcessTable(None, None, thread_provider=lambda pid: [])
+        table.set_hide_root(False)
+        table.update_snapshot([self._process(100, "server", "user")])
+        table._toggle_threads_for_row(0, 1)
+        table.update_snapshot([])
+
+        self.assertNotIn(100, table._expanded_pids)
+
     @staticmethod
     def _process(pid: int, name: str, user: str) -> dict:
         return {
