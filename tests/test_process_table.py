@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtTest import QSignalSpy
 
-from gui.process_table import ProcessTable
+from gui.process_table import ProcessTable, _CLOCK_TICKS, _parse_thread_cpu_stat
 from rules import Rule, RuleEngine
 
 
@@ -28,6 +28,19 @@ class ProcessTableTests(unittest.TestCase):
 
         self.assertEqual(table.COLUMNS[table.COMMAND_COLUMN], "Command")
         self.assertTrue(table.isColumnHidden(table.COMMAND_COLUMN))
+
+    def test_thread_cpu_stat_uses_task_specific_ticks(self):
+        fields = ["S"] + ["0"] * 19
+        fields[11] = "3"
+        fields[12] = "2"
+        fields[19] = "99"
+
+        created, cpu_seconds = _parse_thread_cpu_stat(
+            "123 (worker thread) " + " ".join(fields)
+        )
+
+        self.assertEqual(created, 99)
+        self.assertEqual(cpu_seconds, 5 / _CLOCK_TICKS)
 
     def test_sudo_column_is_hidden_by_default(self):
         table = ProcessTable(None, None)
@@ -241,6 +254,7 @@ class ProcessTableTests(unittest.TestCase):
         threads = [{
             "tid": 101,
             "name": "worker",
+            "cpu_percent": 12.3,
             "nice": 5,
             "affinity": "0-1",
             "ionice": "2/4",
@@ -254,6 +268,8 @@ class ProcessTableTests(unittest.TestCase):
         self.assertEqual(table.rowCount(), 2)
         self.assertEqual(table.item(1, 0).text(), "101")
         self.assertEqual(table.item(1, 1).text().strip(), "↳ worker")
+        self.assertEqual(table.item(1, 4).text(), "12.3")
+        self.assertEqual(table.item(1, 5).text(), "")
         self.assertEqual(table.item(1, table.NICE_CURRENT_COLUMN).text(), "5")
         self.assertEqual(table.item(1, table.AFFINITY_CURRENT_COLUMN).text(), "0-1")
         self.assertEqual(table.item(1, table.STATUS_COLUMN).text(), "Thread")

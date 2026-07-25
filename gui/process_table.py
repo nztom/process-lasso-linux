@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 import psutil
 
@@ -18,26 +19,77 @@ from gui.dialogs import AffinityDialog, NicePriorityDialog, IoNiceDialog, RuleEd
 from gui.table_layout import configure_columns, reset_columns
 
 
-def _read_threads(pid: int) -> list[dict]:
-    """Read display details for the threads currently owned by ``pid``."""
-    threads = []
-    for tid in sorted(utils.get_process_tids(pid)):
-        try:
-            with open(f"/proc/{pid}/task/{tid}/comm") as comm_file:
-                name = comm_file.read().strip()
-            thread = psutil.Process(tid)
-            affinity = utils._cpuset_to_cpulist(set(thread.cpu_affinity()))
-            ionice = thread.ionice()
-            threads.append({
-                "tid": tid,
-                "name": name or str(tid),
-                "nice": thread.nice(),
-                "affinity": affinity,
-                "ionice": f"{ionice.ioclass}/{ionice.value}",
-            })
-        except (OSError, psutil.Error):
-            continue
-    return threads
+_CLOCK_TICKS = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+
+
+def _parse_thread_cpu_stat(text: str) -> tuple[int, float]:
+    """Return task start ticks and user+system CPU seconds from proc stat."""
+    end = text.rfind(")")
+    if end < 0:
+        raise ValueError("invalid task stat")
+    fields = text[end + 1 :].split()
+    if len(fields) <= 19:
+        raise ValueError("truncated task stat")
+    cpu_seconds = (int(fields[11]) + int(fields[12])) / _CLOCK_TICKS
+    return int(fields[19]), cpu_seconds
+
+
+def _read_thread_cpu(pid: int, tid: int) -> tuple[int, float]:
+    with open(f"/proc/{pid}/task/{tid}/stat") as stat_file:
+        return _parse_thread_cpu_stat(stat_file.read())
+
+
+class ThreadSampler:
+    """Sample CPU only for process threads requested by expanded table rows."""
+
+    def __init__(self):
+        # (pid, tid) -> (thread create time, CPU seconds, wall time, last percent)
+        self._samples: dict[tuple[int, int], tuple[float, float, float, float | None]] = {}
+
+    def read(self, pid: int) -> list[dict]:
+        threads = []
+        now = time.monotonic()
+        live_keys = set()
+        for tid in sorted(utils.get_process_tids(pid)):
+            try:
+                with open(f"/proc/{pid}/task/{tid}/comm") as comm_file:
+                    name = comm_file.read().strip()
+                thread = psutil.Process(tid)
+                affinity = utils._cpuset_to_cpulist(set(thread.cpu_affinity()))
+                ionice = thread.ionice()
+                created, cpu_total = _read_thread_cpu(pid, tid)
+                key = (pid, tid)
+                live_keys.add(key)
+                previous = self._samples.get(key)
+                cpu_percent = None
+                if previous is not None and previous[0] == created:
+                    elapsed = now - previous[2]
+                    if elapsed >= 0.25:
+                        cpu_percent = max(0.0, (cpu_total - previous[1]) / elapsed * 100.0)
+                    else:
+                        cpu_percent = previous[3]
+                self._samples[key] = (created, cpu_total, now, cpu_percent)
+                threads.append({
+                    "tid": tid,
+                    "name": name or str(tid),
+                    "cpu_percent": cpu_percent,
+                    "nice": thread.nice(),
+                    "affinity": affinity,
+                    "ionice": f"{ionice.ioclass}/{ionice.value}",
+                })
+            except (OSError, psutil.Error):
+                continue
+        self._samples = {
+            key: sample for key, sample in self._samples.items()
+            if key[0] != pid or key in live_keys
+        }
+        return threads
+
+    def reset(self, pid: int):
+        """Forget samples when a row collapses so hidden time is excluded."""
+        self._samples = {
+            key: sample for key, sample in self._samples.items() if key[0] != pid
+        }
 
 
 class ProcessTable(QTableWidget):
@@ -95,7 +147,10 @@ class ProcessTable(QTableWidget):
         self._hide_root: bool = True
         self._available_users: list[str] = []
         self._expanded_pids: set[int] = set()
-        self._thread_provider = thread_provider or _read_threads
+        self._thread_sampler = ThreadSampler() if thread_provider is None else None
+        self._thread_provider = (
+            thread_provider if thread_provider is not None else self._thread_sampler.read
+        )
         self._col_visible: list[bool] = [True] * len(self.COLUMNS)
         self._setup()
 
@@ -178,7 +233,11 @@ class ProcessTable(QTableWidget):
 
     def update_snapshot(self, snapshot: list[ProcessInfo]):
         self._snapshot = snapshot
-        self._expanded_pids.intersection_update(proc["pid"] for proc in snapshot)
+        live_pids = {proc["pid"] for proc in snapshot}
+        if self._thread_sampler is not None:
+            for pid in self._expanded_pids - live_pids:
+                self._thread_sampler.reset(pid)
+        self._expanded_pids.intersection_update(live_pids)
         users = sorted(
             {proc.get("user", "") for proc in snapshot if proc.get("user", "")},
             key=str.casefold,
@@ -342,7 +401,9 @@ class ProcessTable(QTableWidget):
             str(thread["tid"]),
             f"    ↳ {thread['name']}",
             proc.get("user", ""),
-            "", "", "",
+            "",
+            "" if thread.get("cpu_percent") is None else f"{thread['cpu_percent']:.1f}",
+            "",
             str(thread.get("nice", "")),
             "",
             thread.get("affinity", ""),
@@ -369,6 +430,8 @@ class ProcessTable(QTableWidget):
         pid = int(pid_item.text())
         if pid in self._expanded_pids:
             self._expanded_pids.remove(pid)
+            if self._thread_sampler is not None:
+                self._thread_sampler.reset(pid)
         else:
             self._expanded_pids.add(pid)
         self._refresh_display()
