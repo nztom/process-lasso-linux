@@ -39,6 +39,24 @@ class MonitorSamplingTests(unittest.TestCase):
 
         self.assertEqual(snapshot[0]["cpu_percent"], 1.0)
 
+    @mock.patch("monitor.utils.get_process_tids", return_value=[100])
+    def test_startup_process_rule_does_not_replace_persisted_nice_baseline(
+        self, get_tids
+    ):
+        engine = RuleEngine()
+        monitor = MonitorThread(engine, ProBalance({}), {})
+        info = {"pid": 100, "name": "game.exe", "nice": -8}
+
+        with mock.patch.object(engine, "matches_process", return_value=True), \
+             mock.patch.object(engine, "apply_to_process") as apply:
+            monitor._apply_new_pid(info)
+            monitor._apply_new_pid({"pid": 101, "name": "game.exe", "nice": 7})
+
+        self.assertEqual(apply.call_args_list, [
+            mock.call(100, "game.exe"),
+            mock.call(101, "game.exe"),
+        ])
+
     @mock.patch("monitor._safe_proc_identity")
     def test_pid_reuse_clears_all_old_process_state(self, safe_identity):
         engine = RuleEngine()
@@ -50,6 +68,8 @@ class MonitorSamplingTests(unittest.TestCase):
         }
         monitor._original_affinities[7] = frozenset({0})
         monitor._gaming_niced[7] = 0
+        monitor._known_tids_by_pid[7] = {7, 8}
+        monitor._manually_overridden_pids.add(7)
         probalance._states[7] = mock.Mock()
         proc = mock.Mock(pid=7)
         proc.create_time.return_value = 2.0
@@ -66,8 +86,58 @@ class MonitorSamplingTests(unittest.TestCase):
         self.assertIs(monitor._process_cache[7], replacement)
         self.assertNotIn(7, monitor._original_affinities)
         self.assertNotIn(7, monitor._gaming_niced)
+        self.assertNotIn(7, monitor._known_tids_by_pid)
+        self.assertNotIn(7, monitor._manually_overridden_pids)
         self.assertNotIn(7, probalance._states)
         apply_new.assert_called_once_with(replacement)
+
+    @mock.patch("monitor.utils.get_process_tids", return_value=[100, 101, 102])
+    def test_new_threads_are_applied_once_and_remembered(self, get_tids):
+        engine = RuleEngine()
+        monitor = MonitorThread(engine, ProBalance({}), {})
+        monitor._process_cache = {100: {"pid": 100, "name": "game.exe"}}
+        monitor._known_tids_by_pid = {100: {100, 101}}
+
+        with mock.patch.object(engine, "matches_process", return_value=True), \
+             mock.patch.object(engine, "apply_to_thread") as apply_thread:
+            monitor._sync_new_threads()
+            monitor._sync_new_threads()
+
+        apply_thread.assert_called_once_with(100, 102, "game.exe")
+        self.assertEqual(monitor._known_tids_by_pid[100], {100, 101, 102})
+
+    @mock.patch("monitor.utils.set_thread_affinity", return_value=True)
+    @mock.patch("monitor.utils.get_process_tids", return_value=[200, 201])
+    def test_new_threads_receive_default_affinity(self, get_tids, set_affinity):
+        monitor = MonitorThread(
+            RuleEngine(),
+            ProBalance({}),
+            {"cpu": {"default_affinity": "0-3"}},
+        )
+        monitor._process_cache = {200: {"pid": 200, "name": "worker"}}
+        monitor._known_tids_by_pid = {200: {200}}
+
+        monitor._sync_new_threads()
+
+        set_affinity.assert_called_once_with(201, "0-3")
+
+    @mock.patch("monitor.utils.set_thread_affinity", return_value=True)
+    @mock.patch("monitor.utils.get_process_tids", return_value=[200, 201])
+    def test_manual_override_suppresses_default_on_new_threads(
+        self, get_tids, set_affinity
+    ):
+        monitor = MonitorThread(
+            RuleEngine(),
+            ProBalance({}),
+            {"cpu": {"default_affinity": "0-3"}},
+        )
+        monitor._process_cache = {200: {"pid": 200, "name": "worker"}}
+        monitor._known_tids_by_pid = {200: {200}}
+        monitor.set_manual_rule_override(200)
+
+        monitor._sync_new_threads()
+
+        set_affinity.assert_not_called()
 
     @mock.patch("monitor._safe_proc_identity")
     def test_exec_refreshes_metadata_but_keeps_lifetime_state(self, safe_identity):

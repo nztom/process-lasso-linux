@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QComboBox, QGridLayout, QCheckBox, QWidget,
     QScrollArea, QGroupBox, QDialogButtonBox, QMessageBox,
     QTableWidget, QTableWidgetItem, QAbstractItemView, QLineEdit,
-    QHeaderView,
+    QHeaderView, QStackedWidget,
 )
 from PyQt6.QtCore import Qt, QSortFilterProxyModel, QTimer
 from PyQt6.QtGui import QStandardItemModel, QStandardItem
@@ -519,7 +519,19 @@ class RuleEditDialog(QDialog):
         self._nice_spin = QSpinBox()
         self._nice_spin.setRange(-20, 19)
         self._nice_spin.setEnabled(False)
-        self._nice_cb.toggled.connect(self._nice_spin.setEnabled)
+        self._nice_mode = QComboBox()
+        self._nice_mode.addItem("Absolute", "absolute")
+        self._nice_mode.addItem("Offset", "offset")
+        self._nice_offset_spin = QSpinBox()
+        self._nice_offset_spin.setRange(-39, 39)
+        self._nice_floor_spin = QSpinBox()
+        self._nice_floor_spin.setRange(-20, 19)
+        self._nice_floor_spin.setValue(-15)
+        self._nice_ceiling_spin = QSpinBox()
+        self._nice_ceiling_spin.setRange(-20, 19)
+        self._nice_ceiling_spin.setValue(19)
+        self._nice_cb.toggled.connect(self._update_nice_controls)
+        self._nice_mode.currentIndexChanged.connect(self._update_nice_controls)
 
         self._ionice_cb = QCheckBox("Enable")
         self._ionice_class_combo = QComboBox()
@@ -554,7 +566,30 @@ class RuleEditDialog(QDialog):
 
         nice_row = QHBoxLayout()
         nice_row.addWidget(self._nice_cb)
-        nice_row.addWidget(self._nice_spin)
+        nice_row.addWidget(self._nice_mode)
+
+        absolute_page = QWidget()
+        absolute_layout = QHBoxLayout(absolute_page)
+        absolute_layout.setContentsMargins(0, 0, 0, 0)
+        absolute_layout.addWidget(QLabel("Nice value:"))
+        absolute_layout.addWidget(self._nice_spin)
+        absolute_layout.addStretch()
+
+        offset_page = QWidget()
+        offset_layout = QHBoxLayout(offset_page)
+        offset_layout.setContentsMargins(0, 0, 0, 0)
+        offset_layout.addWidget(QLabel("Offset:"))
+        offset_layout.addWidget(self._nice_offset_spin)
+        offset_layout.addWidget(QLabel("Floor:"))
+        offset_layout.addWidget(self._nice_floor_spin)
+        offset_layout.addWidget(QLabel("Ceiling:"))
+        offset_layout.addWidget(self._nice_ceiling_spin)
+        offset_layout.addStretch()
+
+        self._nice_controls = QStackedWidget()
+        self._nice_controls.addWidget(absolute_page)
+        self._nice_controls.addWidget(offset_page)
+        nice_row.addWidget(self._nice_controls)
         nice_row.addStretch()
         form.addRow("Nice priority:", nice_row)
 
@@ -590,6 +625,12 @@ class RuleEditDialog(QDialog):
             if self._rule.nice is not None:
                 self._nice_cb.setChecked(True)
                 self._nice_spin.setValue(self._rule.nice)
+                self._nice_mode.setCurrentIndex(
+                    max(0, self._nice_mode.findData(self._rule.nice_mode))
+                )
+                self._nice_offset_spin.setValue(self._rule.nice_offset)
+                self._nice_floor_spin.setValue(self._rule.nice_floor)
+                self._nice_ceiling_spin.setValue(self._rule.nice_ceiling)
             if self._rule.ionice_class is not None:
                 self._ionice_cb.setChecked(True)
                 idx2 = next(
@@ -601,6 +642,18 @@ class RuleEditDialog(QDialog):
                     self._ionice_level_spin.setValue(self._rule.ionice_level)
             self._enabled_cb.setChecked(self._rule.enabled)
             self._force_apply_cb.setChecked(self._rule.force_apply)
+
+        self._update_nice_controls()
+
+    def _update_nice_controls(self):
+        enabled = self._nice_cb.isChecked()
+        offset = self._nice_mode.currentData() == "offset"
+        self._nice_mode.setEnabled(enabled)
+        self._nice_controls.setCurrentIndex(1 if offset else 0)
+        self._nice_controls.setEnabled(enabled)
+        self._nice_spin.setEnabled(enabled and not offset)
+        for control in (self._nice_offset_spin, self._nice_floor_spin, self._nice_ceiling_spin):
+            control.setEnabled(enabled and offset)
 
     def _pick_affinity(self):
         """Open topology-aware CPU picker and store result in the display field."""
@@ -642,6 +695,11 @@ class RuleEditDialog(QDialog):
             except re.error as exc:
                 QMessageBox.warning(self, "Validation", f"Invalid regular expression:\n{exc}")
                 return
+        if (self._nice_cb.isChecked()
+                and self._nice_mode.currentData() == "offset"
+                and self._nice_floor_spin.value() > self._nice_ceiling_spin.value()):
+            QMessageBox.warning(self, "Validation", "Nice floor cannot exceed ceiling.")
+            return
         self.accept()
 
     def get_rule(self):
@@ -661,6 +719,10 @@ class RuleEditDialog(QDialog):
             match_type=self._match_combo.currentText(),
             affinity=affinity,
             nice=nice,
+            nice_mode=self._nice_mode.currentData(),
+            nice_offset=self._nice_offset_spin.value(),
+            nice_floor=self._nice_floor_spin.value(),
+            nice_ceiling=self._nice_ceiling_spin.value(),
             ionice_class=ionice_class,
             ionice_level=ionice_level,
             enabled=self._enabled_cb.isChecked(),

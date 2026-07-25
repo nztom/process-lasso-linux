@@ -64,7 +64,19 @@ case "$1" in
         # renice-pid <nice_value> <pid>   (nice_value may be negative)
         [[ "$2" =~ ^-?[0-9]+$ ]] || exit 1
         [[ "$3" =~ ^[0-9]+$ ]]   || exit 1
+        (( $2 >= -20 && $2 <= 19 )) || exit 1
         renice -n "$2" -p "$3"
+        ;;
+    renice-pids)
+        # renice-pids <nice_value> <tid>... — one renice invocation.
+        (( $# >= 3 )) || exit 1
+        [[ "$2" =~ ^-?[0-9]+$ ]] || exit 1
+        (( $2 >= -20 && $2 <= 19 )) || exit 1
+        nice="$2"; shift 2
+        for tid in "$@"; do
+            [[ "$tid" =~ ^[0-9]+$ ]] || exit 1
+        done
+        renice -n "$nice" -p "$@"
         ;;
     *)
         echo "Unknown command: $1" >&2; exit 1 ;;
@@ -321,11 +333,11 @@ def is_sudoers_installed() -> bool:
 
 
 def is_helper_current() -> bool:
-    """True if helper is installed AND has the renice-pid command (up to date)."""
+    """True if the installed helper supports current batch renice."""
     if not is_helper_installed():
         return False
     try:
-        return "renice-pid" in open(HELPER).read()
+        return "renice-pids)" in open(HELPER).read()
     except OSError:
         return False
 

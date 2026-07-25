@@ -46,6 +46,18 @@ class SetNiceTests(unittest.TestCase):
             timeout=5,
         )
 
+    @mock.patch("utils.os.sched_setaffinity")
+    def test_thread_affinity_targets_only_requested_tid(self, set_affinity):
+        self.assertTrue(utils.set_thread_affinity(1235, "0-3"))
+
+        set_affinity.assert_called_once_with(1235, {0, 1, 2, 3})
+
+    @mock.patch("nice_helper.set_negative_nice_thread", return_value=True)
+    def test_negative_thread_nice_uses_single_thread_helper(self, helper):
+        self.assertTrue(utils.set_thread_nice(1235, -8))
+
+        helper.assert_called_once_with(1235, -8)
+
 
 if __name__ == "__main__":
     unittest.main()

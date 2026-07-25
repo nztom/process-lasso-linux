@@ -111,6 +111,7 @@ class MainWindow(QMainWindow):
             log_callback=self._append_log,
         )
         self._proc_table.rule_add_requested.connect(self._on_rule_add_from_table)
+        self._proc_table.rule_remove_requested.connect(self._on_rules_removed_from_table)
         self._proc_table.rule_value_manually_changed.connect(self._on_rule_value_manual_change)
         self._proc_filter.textChanged.connect(self._proc_table.set_filter)
         self._user_filter.currentIndexChanged.connect(self._on_user_filter_changed)
@@ -269,6 +270,7 @@ class MainWindow(QMainWindow):
 
     def _on_rules_changed(self):
         self._save_config()
+        self._proc_table.refresh_rule_columns()
         # Re-apply rules + default to all running processes so that processes
         # previously matched by a now-deleted or changed rule don't stay stuck
         # with a stale affinity.
@@ -298,6 +300,14 @@ class MainWindow(QMainWindow):
     def _on_rule_add_from_table(self, rule):
         self._rules_panel.add_rule_direct(rule)
         self._tabs.setCurrentIndex(1)  # Switch to Rules tab
+
+    @pyqtSlot(list)
+    def _on_rules_removed_from_table(self, rule_ids: list[str]):
+        for rule_id in rule_ids:
+            self._rule_engine.remove_rule(rule_id)
+        self._rules_panel.refresh()
+        self._save_config()
+        self._proc_table.refresh_rule_columns()
 
     @pyqtSlot(dict)
     def _on_pb_settings_changed(self, pb_cfg: dict):

@@ -5,12 +5,13 @@ import os
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtTest import QSignalSpy
 
 from gui.process_table import ProcessTable
@@ -174,11 +175,40 @@ class ProcessTableTests(unittest.TestCase):
         }])
 
         self.assertEqual(table.item(0, table.NICE_CURRENT_COLUMN).text(), "0")
-        self.assertEqual(table.item(0, table.NICE_ALWAYS_COLUMN).text(), "High (-10)")
+        self.assertEqual(table.item(0, table.NICE_ALWAYS_COLUMN).text(), "Absolute -10")
         self.assertEqual(table.item(0, table.AFFINITY_CURRENT_COLUMN).text(), "0-7")
         self.assertEqual(table.item(0, table.AFFINITY_ALWAYS_COLUMN).text(), "4-7")
         self.assertEqual(table.item(0, table.IONICE_CURRENT_COLUMN).text(), "2/4")
         self.assertEqual(table.item(0, table.IONICE_ALWAYS_COLUMN).text(), "Very Low (3)")
+
+    def test_always_columns_refresh_immediately_after_rule_edit(self):
+        engine = RuleEngine()
+        rule = Rule(pattern="game.exe", match_type="exact", affinity="0-3", nice=-8)
+        engine.add_rule(rule)
+        table = ProcessTable(engine, None)
+        table.update_snapshot([self._process(42, "game.exe", "user")])
+
+        rule.affinity = "4-7"
+        rule.nice = -5
+        engine.update_rule(rule)
+        table.refresh_rule_columns()
+
+        self.assertEqual(table.item(0, table.AFFINITY_ALWAYS_COLUMN).text(), "4-7")
+        self.assertEqual(table.item(0, table.NICE_ALWAYS_COLUMN).text(), "Absolute -5")
+
+    def test_offset_always_column_shows_policy_not_internal_nice_marker(self):
+        engine = RuleEngine()
+        engine.add_rule(Rule(
+            pattern="game.exe", match_type="exact", nice=-8,
+            nice_mode="offset", nice_offset=-5, nice_floor=-15, nice_ceiling=19,
+        ))
+        table = ProcessTable(engine, None)
+        table.update_snapshot([self._process(42, "game.exe", "user")])
+
+        self.assertEqual(
+            table.item(0, table.NICE_ALWAYS_COLUMN).text(),
+            "Offset -5 [-15, 19]",
+        )
 
     def test_root_processes_are_hidden_by_default_and_can_be_shown(self):
         table = ProcessTable(None, None)
@@ -321,6 +351,35 @@ class ProcessTableTests(unittest.TestCase):
         self.assertEqual(updated.rule_id, existing.rule_id)
         self.assertEqual(updated.affinity, "4-7")
         self.assertTrue(updated.force_apply)
+
+    @mock.patch(
+        "gui.process_table.QMessageBox.question",
+        return_value=QMessageBox.StandardButton.Yes,
+    )
+    def test_clear_process_rule_requests_removal_without_applying_changes(self, question):
+        engine = RuleEngine()
+        matching = Rule(name="Game priority", pattern="game.exe", match_type="exact", nice=-5)
+        unrelated = Rule(name="Other", pattern="other.exe", match_type="exact", nice=5)
+        engine.add_rule(matching)
+        engine.add_rule(unrelated)
+        table = ProcessTable(engine, None)
+        spy = QSignalSpy(table.rule_remove_requested)
+
+        table._do_clear_rules({"pid": 42, "name": "game.exe"}, [matching.rule_id])
+
+        self.assertEqual(spy[0][0], [matching.rule_id])
+        self.assertEqual(engine.get_rules(), [matching, unrelated])
+        question.assert_called_once()
+
+    def test_clear_process_rule_only_lists_matching_rules(self):
+        engine = RuleEngine()
+        matching = Rule(name="Game", pattern="game.exe", match_type="exact")
+        engine.add_rule(matching)
+        engine.add_rule(Rule(name="Other", pattern="other.exe", match_type="exact"))
+
+        table = ProcessTable(engine, None)
+
+        self.assertEqual(table._matching_rules("game.exe"), [matching])
 
 
 if __name__ == "__main__":

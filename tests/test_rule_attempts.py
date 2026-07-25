@@ -16,23 +16,43 @@ class RuleAttemptTests(unittest.TestCase):
         self.engine = RuleEngine()
         self.rule = Rule(name="Game", pattern="game.exe", match_type="exact", affinity="0-3")
         self.engine.add_rule(self.rule)
+        self.tids = mock.patch("rules.utils.get_process_tids", side_effect=lambda pid: [pid])
+        self.identity = mock.patch(
+            "rules.thread_identity",
+            side_effect=lambda pid, tid, rule_id, boot: f"{boot}:{pid}:1:{tid}:2:{rule_id}",
+        )
+        self.current_affinity = mock.patch(
+            "rules.os.sched_getaffinity", return_value={8}
+        )
+        self.tids.start()
+        self.identity.start()
+        self.current_affinity.start()
 
-    @mock.patch("rules.utils.set_affinity", return_value=True)
+    def tearDown(self):
+        mock.patch.stopall()
+
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_rule_stops_after_ten_attempts(self, set_affinity):
+        logs = []
+        self.engine.set_log_callback(logs.append)
         for _ in range(20):
             self.engine.apply_to_process(100, "game.exe")
 
-        self.assertEqual(set_affinity.call_count, RULE_APPLY_ATTEMPTS)
+        self.assertEqual(set_affinity.call_count, RULE_APPLY_ATTEMPTS + 1)
+        self.assertEqual(
+            len([message for message in logs if "Released affinity drift" in message]),
+            1,
+        )
 
-    @mock.patch("rules.utils.set_affinity", return_value=True)
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_attempts_are_independent_per_pid(self, set_affinity):
         for _ in range(20):
             self.engine.apply_to_process(100, "game.exe")
             self.engine.apply_to_process(200, "game.exe")
 
-        self.assertEqual(set_affinity.call_count, RULE_APPLY_ATTEMPTS * 2)
+        self.assertEqual(set_affinity.call_count, (RULE_APPLY_ATTEMPTS + 1) * 2)
 
-    @mock.patch("rules.utils.set_affinity", return_value=True)
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_forgetting_pid_allows_rule_to_apply_again(self, set_affinity):
         for _ in range(RULE_APPLY_ATTEMPTS):
             self.engine.apply_to_process(100, "game.exe")
@@ -41,7 +61,7 @@ class RuleAttemptTests(unittest.TestCase):
 
         self.assertEqual(set_affinity.call_count, RULE_APPLY_ATTEMPTS + 1)
 
-    @mock.patch("rules.utils.set_affinity", return_value=True)
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_manual_suppression_stops_rule(self, set_affinity):
         self.engine.apply_to_process(100, "game.exe")
         self.engine.suppress_pid(100)
@@ -50,7 +70,7 @@ class RuleAttemptTests(unittest.TestCase):
         set_affinity.assert_called_once_with(100, "0-3")
 
     @mock.patch("rules.utils.set_nice", return_value=True)
-    @mock.patch("rules.utils.set_affinity", return_value=True)
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_edit_resets_only_edited_rule(self, set_affinity, set_nice):
         nice_rule = Rule(name="Nice", pattern="game.exe", match_type="exact", nice=-1)
         self.engine.add_rule(nice_rule)
@@ -76,7 +96,7 @@ class RuleAttemptTests(unittest.TestCase):
         self.assertNotIn("_attempts_by_pid", vars(self.rule))
         self.assertNotIn("_attempts_by_pid", self.rule.to_dict())
 
-    @mock.patch("rules.utils.set_affinity", return_value=True)
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_force_apply_bypasses_attempt_limit_and_suppression(self, set_affinity):
         self.rule.force_apply = True
         self.engine.suppress_pid(100)
@@ -96,6 +116,15 @@ class RuleAttemptTests(unittest.TestCase):
         restored = Rule.from_dict({"name": "Legacy", "pattern": "legacy"})
 
         self.assertFalse(restored.force_apply)
+
+    def test_exact_process_name_match_is_case_insensitive(self):
+        rule = Rule(
+            pattern="blackdesert64.exe",
+            match_type="exact",
+            affinity="0-7",
+        )
+
+        self.assertTrue(rule.matches("BlackDesert64.exe"))
 
     def test_effective_settings_use_last_matching_value_per_field(self):
         self.engine.add_rule(Rule(
@@ -120,6 +149,52 @@ class RuleAttemptTests(unittest.TestCase):
             "ionice_class": 3,
             "ionice_level": None,
         })
+
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_new_thread_receives_matching_affinity_rule(self, set_affinity):
+        self.engine.apply_to_thread(100, 123, "game.exe")
+
+        set_affinity.assert_called_once_with(123, "0-3")
+
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_manual_override_suppresses_new_thread_rules(self, set_affinity):
+        self.engine.suppress_pid(100)
+
+        self.engine.apply_to_thread(100, 123, "game.exe")
+
+        set_affinity.assert_not_called()
+
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_editing_rule_clears_its_manual_suppression(self, set_affinity):
+        self.engine.suppress_pid(100)
+        edited = Rule(
+            rule_id=self.rule.rule_id,
+            name="Game",
+            pattern="game.exe",
+            match_type="exact",
+            affinity="4-7",
+        )
+        self.engine.update_rule(edited)
+
+        self.engine.apply_to_thread(100, 123, "game.exe")
+
+        set_affinity.assert_called_once_with(123, "4-7")
+
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_forced_rule_places_new_thread_once(self, set_affinity):
+        self.rule.force_apply = True
+
+        self.engine.apply_to_thread(100, 123, "game.exe")
+
+        set_affinity.assert_called_once_with(123, "0-3")
+
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_matching_affinity_is_never_rewritten(self, set_affinity):
+        with mock.patch("rules.os.sched_getaffinity", return_value={0, 1, 2, 3}):
+            for _ in range(20):
+                self.engine.apply_to_process(100, "game.exe")
+
+        set_affinity.assert_not_called()
 
 
 if __name__ == "__main__":

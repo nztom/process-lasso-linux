@@ -44,6 +44,7 @@ class ProcessTable(QTableWidget):
     """Sortable process table with right-click context menu."""
 
     rule_add_requested = pyqtSignal(object)  # emits Rule
+    rule_remove_requested = pyqtSignal(list)  # rule IDs; does not reset live process
     rule_value_manually_changed = pyqtSignal(int)  # pid — stop its startup rule burst
     available_users_changed = pyqtSignal(list)
 
@@ -187,6 +188,10 @@ class ProcessTable(QTableWidget):
             self.available_users_changed.emit(users)
         self._refresh_display()
 
+    def refresh_rule_columns(self):
+        """Immediately redraw effective Always values after rule changes."""
+        self._refresh_display()
+
     def set_filter(self, text: str):
         """Filter displayed processes by name or PID (case-insensitive substring)."""
         self._filter_text = text.strip().lower()
@@ -215,7 +220,7 @@ class ProcessTable(QTableWidget):
             4: lambda p: p["cpu_percent"],
             5: lambda p: p["mem_rss"],
             6: lambda p: p["nice"],
-            7: lambda p: self._format_nice(always_settings(p).get("nice")),
+            7: lambda p: self._format_priority_rule(always_settings(p)),
             8: lambda p: p["affinity"],
             9: lambda p: always_settings(p).get("affinity") or "",
             10: lambda p: p["ionice"],
@@ -271,7 +276,7 @@ class ProcessTable(QTableWidget):
                 f"{cpu:.1f}",
                 f"{proc['mem_rss'] / 1_048_576:.1f}",
                 str(proc["nice"]),
-                self._format_nice(persistent.get("nice")),
+                self._format_priority_rule(persistent),
                 proc.get("affinity", ""),
                 persistent.get("affinity") or "",
                 proc.get("ionice", ""),
@@ -318,6 +323,18 @@ class ProcessTable(QTableWidget):
             for thread in threads_by_pid.get(pid, []):
                 self._render_thread_row(row, proc, thread)
                 row += 1
+
+    @staticmethod
+    def _format_priority_rule(settings: dict) -> str:
+        """Render the effective policy without exposing Offset's nice marker."""
+        if settings.get("nice_mode") == "offset":
+            return (
+                f"Offset {settings.get('nice_offset', 0):+d} "
+                f"[{settings.get('nice_floor', -15)}, "
+                f"{settings.get('nice_ceiling', 19)}]"
+            )
+        nice = settings.get("nice")
+        return f"Absolute {nice}" if nice is not None else ""
 
     def _render_thread_row(self, row: int, proc: ProcessInfo, thread: dict):
         """Render a display-only child row beneath its owning process."""
@@ -473,7 +490,51 @@ class ProcessTable(QTableWidget):
             f"Add Rule for '{proc['name']}'...",
             lambda: self._do_add_rule(proc)
         )
+        clear_menu = menu.addMenu("Clear Rules")
+        matching_rules = self._matching_rules(proc["name"])
+        clear_menu.setEnabled(bool(matching_rules))
+        for rule in matching_rules:
+            clear_menu.addAction(
+                rule.name or rule.pattern,
+                lambda checked=False, rule_id=rule.rule_id: self._do_clear_rules(
+                    proc, [rule_id]
+                ),
+            )
+        if len(matching_rules) > 1:
+            clear_menu.addSeparator()
+            clear_menu.addAction(
+                "Clear All Matching Rules",
+                lambda: self._do_clear_rules(
+                    proc, [rule.rule_id for rule in matching_rules]
+                ),
+            )
         menu.exec(self.viewport().mapToGlobal(pos))
+
+    def _matching_rules(self, proc_name: str) -> list:
+        if self._rule_engine is None:
+            return []
+        return [
+            rule for rule in self._rule_engine.get_rules()
+            if rule.pattern_matches(proc_name)
+        ]
+
+    def _do_clear_rules(self, proc: dict, rule_ids: list[str]):
+        rules = [
+            rule for rule in self._matching_rules(proc["name"])
+            if rule.rule_id in rule_ids
+        ]
+        if not rules:
+            return
+        names = "\n".join(f"• {rule.name or rule.pattern}" for rule in rules)
+        answer = QMessageBox.question(
+            self,
+            "Clear Process Rules",
+            f"Remove {len(rules)} matching rule(s) for {proc['name']}?\n\n{names}\n\n"
+            "The running process will not be reset or modified.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.rule_remove_requested.emit([rule.rule_id for rule in rules])
 
     def _do_kill(self, proc: dict, force: bool):
         import signal
@@ -586,11 +647,21 @@ class ProcessTable(QTableWidget):
             )
 
     def _do_add_priority_rule(self, proc: dict):
-        dlg = NicePriorityDialog(proc.get("nice", 0), self, proc["name"])
-        if dlg.exec() == NicePriorityDialog.DialogCode.Accepted:
-            self._emit_always_rule(
-                proc, "CPU Priority", nice=dlg.get_nice()
-            )
+        from rules import Rule
+        existing = None
+        if self._rule_engine is not None:
+            existing = next((
+                rule for rule in reversed(self._rule_engine.get_rules())
+                if rule.pattern == proc["name"] and rule.match_type == "exact"
+                and rule.nice is not None
+            ), None)
+        template = existing or Rule(
+            name=f"{proc['name']} — CPU Priority", pattern=proc["name"],
+            match_type="exact", nice=proc.get("nice", 0),
+        )
+        dlg = RuleEditDialog(rule=template, parent=self)
+        if dlg.exec() == RuleEditDialog.DialogCode.Accepted:
+            self.rule_add_requested.emit(dlg.get_rule())
 
     def _do_add_ionice_rule(self, proc: dict):
         current_class, current_level = self._parse_ionice(proc.get("ionice", ""))

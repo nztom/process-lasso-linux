@@ -105,7 +105,9 @@ class RulesPanel(QWidget):
                 rule.pattern,
                 rule.match_type,
                 rule.affinity or "",
-                str(rule.nice) if rule.nice is not None else "",
+                (f"Offset {rule.nice_offset:+d} [{rule.nice_floor}, {rule.nice_ceiling}]"
+                 if rule.nice is not None and rule.nice_mode == "offset"
+                 else f"Absolute {rule.nice}" if rule.nice is not None else ""),
                 str(rule.ionice_class) if rule.ionice_class is not None else "",
                 str(rule.ionice_level) if rule.ionice_level is not None else "",
             ]

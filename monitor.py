@@ -192,6 +192,8 @@ class MonitorThread(QThread):
         self._config = config
         self._stop = False
         self._known_pids: set[int] = set()
+        self._known_tids_by_pid: dict[int, set[int]] = {}
+        self._manually_overridden_pids: set[int] = set()
         self._process_cache: dict[int, ProcessInfo] = {}
 
         # Track original affinity before we change it, for "Reset All" function.
@@ -260,9 +262,11 @@ class MonitorThread(QThread):
 
     def set_manual_rule_override(self, pid: int):
         """Stop the startup burst after a manual affinity or nice change."""
+        self._manually_overridden_pids.add(pid)
         self._rule_engine.suppress_pid(pid)
 
     def stop(self):
+        self._rule_engine.flush_priority_state()
         self._stop = True
 
     def reset_all_affinities(self):
@@ -305,6 +309,8 @@ class MonitorThread(QThread):
         self._process_cache.pop(pid, None)
         self._original_affinities.pop(pid, None)
         self._gaming_niced.pop(pid, None)
+        self._known_tids_by_pid.pop(pid, None)
+        self._manually_overridden_pids.discard(pid)
 
     def _snapshot_records(self) -> list[ProcessInfo]:
         """Return records detached from the worker-owned mutable cache."""
@@ -314,6 +320,7 @@ class MonitorThread(QThread):
         """Apply rules or default affinity to a newly seen process."""
         pid = info["pid"]
         name = info["name"]
+        self._known_tids_by_pid.setdefault(pid, set(utils.get_process_tids(pid)))
         self._capture_original(pid)
         matched = self._rule_engine.matches_process(name)
         if matched:
@@ -330,6 +337,29 @@ class MonitorThread(QThread):
             if default:
                 if utils.set_affinity(pid, default):
                     self._emit_log(f"[Default] affinity={default} → {name}({pid})")
+
+    def _sync_new_threads(self):
+        """Apply process rules to TIDs first observed after process startup."""
+        default = self._default_affinity()
+        for pid, info in list(self._process_cache.items()):
+            current_tids = set(utils.get_process_tids(pid))
+            if not current_tids:
+                continue
+            known_tids = self._known_tids_by_pid.setdefault(pid, set())
+            new_tids = current_tids - known_tids
+            for tid in sorted(new_tids):
+                if self._rule_engine.matches_process(info["name"]):
+                    self._rule_engine.apply_to_thread(pid, tid, info["name"])
+                elif (
+                    default
+                    and pid not in self._manually_overridden_pids
+                    and utils.set_thread_affinity(tid, default)
+                ):
+                    self._emit_log(
+                        f"[Default] affinity={default} → new thread "
+                        f"{info['name']}({tid})"
+                    )
+            self._known_tids_by_pid[pid] = current_tids
 
     def _sync_processes(self, procs: list[psutil.Process]) -> dict[int, psutil.Process]:
         """Update the PID set and cache identities only for new/changed PIDs."""
@@ -412,6 +442,7 @@ class MonitorThread(QThread):
             if enforce_due:
                 for info in self._process_cache.values():
                     self._rule_engine.apply_to_process(info["pid"], info["name"])
+                self._sync_new_threads()
                 last_enforce = now
 
             # Refresh CPU/nice only when ProBalance or the display needs them.

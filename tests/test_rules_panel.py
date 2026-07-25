@@ -9,7 +9,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication, QHeaderView
 
 from gui.rules_panel import RulesPanel
-from rules import RuleEngine
+from gui.dialogs import RuleEditDialog
+from rules import Rule, RuleEngine
 
 
 class RulesPanelLayoutTests(unittest.TestCase):
@@ -61,6 +62,18 @@ class RulesPanelLayoutTests(unittest.TestCase):
         for column, width in panel.DEFAULT_COLUMN_WIDTHS.items():
             self.assertFalse(header.isSectionHidden(column))
             self.assertEqual(header.sectionSize(column), width)
+
+    def test_rule_editor_shows_only_selected_priority_controls(self):
+        dialog = RuleEditDialog(Rule(pattern="game", nice=0))
+        self.assertEqual(dialog._nice_controls.currentIndex(), 0)
+        self.assertTrue(dialog._nice_spin.isEnabled())
+        self.assertFalse(dialog._nice_offset_spin.isEnabled())
+
+        dialog._nice_mode.setCurrentIndex(dialog._nice_mode.findData("offset"))
+
+        self.assertEqual(dialog._nice_controls.currentIndex(), 1)
+        self.assertFalse(dialog._nice_spin.isEnabled())
+        self.assertTrue(dialog._nice_offset_spin.isEnabled())
 
 
 if __name__ == "__main__":

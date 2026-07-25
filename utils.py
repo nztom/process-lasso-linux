@@ -61,6 +61,16 @@ def set_affinity(pid: int, cpulist: str) -> bool:
     return any_ok
 
 
+def set_thread_affinity(tid: int, cpulist: str) -> bool:
+    """Apply CPU affinity to one newly observed thread."""
+    try:
+        os.sched_setaffinity(tid, cpulist_to_set(cpulist))
+        return True
+    except (ValueError, PermissionError, ProcessLookupError, OSError) as exc:
+        log.debug("sched_setaffinity tid=%d: %s", tid, exc)
+        return False
+
+
 def get_affinity_str(pid: int) -> str:
     """Read current affinity of main thread, return as cpulist string."""
     try:
@@ -116,6 +126,46 @@ def set_nice(pid: int, nice: int) -> bool:
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
         log.warning("renice error pid=%d: %s", pid, e)
         return False
+
+
+def set_thread_nice(tid: int, nice: int) -> bool:
+    """Set nice priority on one newly observed thread."""
+    if nice < 0:
+        import nice_helper
+
+        return nice_helper.set_negative_nice_thread(tid, nice)
+    try:
+        result = subprocess.run(
+            ["renice", "-n", str(nice), "-p", str(tid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+
+
+def get_thread_nice(tid: int) -> int:
+    return os.getpriority(os.PRIO_PROCESS, tid)
+
+
+def set_nice_threads(tids: list[int], nice: int) -> set[int]:
+    """Apply one target to a thread batch and return the successful TIDs."""
+    tids = sorted(set(tids))
+    if not tids or not -20 <= nice <= 19:
+        return set()
+    if nice < 0:
+        import nice_helper
+        return nice_helper.set_negative_nice_threads(tids, nice)
+    try:
+        result = subprocess.run(
+            ["renice", "-n", str(nice), "-p", *map(str, tids)],
+            capture_output=True, text=True, timeout=5,
+        )
+        return set(tids) if result.returncode == 0 else set()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return set()
 
 
 def set_ionice(pid: int, ionice_class: int, ionice_level: int | None = None) -> bool:

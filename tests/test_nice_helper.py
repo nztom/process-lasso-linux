@@ -20,17 +20,10 @@ class NiceHelperTests(unittest.TestCase):
 
         self.assertTrue(nice_helper.set_negative_nice(1234, -1))
 
-        self.assertEqual(run.call_count, 2)
-        run.assert_has_calls([
-            mock.call(
-                ["sudo", nice_helper.HELPER, "renice-pid", "-1", "1234"],
-                capture_output=True, text=True, timeout=10,
-            ),
-            mock.call(
-                ["sudo", nice_helper.HELPER, "renice-pid", "-1", "1235"],
-                capture_output=True, text=True, timeout=10,
-            ),
-        ])
+        run.assert_called_once_with(
+            ["sudo", nice_helper.HELPER, "renice-pids", "-1", "1234", "1235"],
+            capture_output=True, text=True, timeout=10,
+        )
 
     @mock.patch("nice_helper.os.getpriority", return_value=-1)
     @mock.patch("nice_helper.utils.get_process_tids", return_value=[1234, 1235])
