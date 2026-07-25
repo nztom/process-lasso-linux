@@ -30,7 +30,30 @@ class ProBalance:
         self._states: dict[int, _ProcState] = {}  # pid → state
 
     def update_config(self, config: dict):
+        was_enabled = self._cfg.get("enabled", True)
         self._cfg = config
+        if was_enabled and not config.get("enabled", True):
+            self._restore_all_throttled()
+
+    def _restore_all_throttled(self):
+        """Restore every process currently throttled by ProBalance."""
+        for pid, state in self._states.items():
+            if state.state != "THROTTLED":
+                continue
+
+            original_nice = state.original_nice
+            if original_nice is None:
+                original_nice = 0
+            if utils.set_nice(pid, original_nice):
+                self._log(
+                    f"[ProBalance] RESTORE pid={pid} nice→{original_nice} "
+                    "(ProBalance disabled)"
+                )
+                state.state = "NORMAL"
+                state.consecutive_high = 0.0
+                state.consecutive_low = 0.0
+                state.original_nice = original_nice
+                state.throttle_nice = None
 
     def set_log_callback(self, cb):
         self._log_callback = cb
@@ -56,6 +79,9 @@ class ProBalance:
         tick_seconds: elapsed time since last tick
         """
         if not self._cfg.get("enabled", True):
+            # update_config() restores immediately; retry here in case a process
+            # temporarily rejected that first attempt.
+            self._restore_all_throttled()
             return
 
         threshold = self._cfg.get("cpu_threshold_percent", 85.0)
