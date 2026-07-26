@@ -138,7 +138,7 @@ in the same phase.
   effective-policy dictionary adapter and consolidate pure formatters after all
   GUI consumers are typed. Files: model/rule modules and GUI tests. Detailed
   reference: Phase 7.
-- [ ] **Chunk 14 — Integration and deployment audit.** Run automated and manual
+- [x] **Chunk 14 — Integration and deployment audit.** Run automated and manual
   checks, then deploy through the user service workflow. Detailed reference:
   Phase 8. This chunk must not contain architectural refactoring.
 
