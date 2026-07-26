@@ -19,6 +19,38 @@ from rules import Rule, RuleEngine
 
 
 class MonitorSamplingTests(unittest.TestCase):
+    @mock.patch("monitor.utils.set_nice", return_value=True)
+    def test_gaming_mode_restore_uses_shared_process_nice_helper(self, set_nice):
+        monitor = MonitorThread(RuleEngine(), ProBalance({}), {})
+        monitor._gaming_niced = {101: 0, 202: 5}
+
+        monitor._restore_gaming_nices()
+
+        self.assertEqual(
+            set_nice.call_args_list,
+            [mock.call(101, 0), mock.call(202, 5)],
+        )
+        self.assertEqual(monitor._gaming_niced, {})
+
+    @mock.patch("monitor.os.sched_getaffinity", return_value={0, 1})
+    @mock.patch("monitor.utils.get_process_tids", return_value=[101])
+    @mock.patch("monitor.utils.set_nice", return_value=True)
+    def test_gaming_mode_elevation_uses_shared_process_nice_helper(
+        self, set_nice, _get_tids, _get_affinity
+    ):
+        engine = RuleEngine()
+        monitor = MonitorThread(engine, ProBalance({}), {})
+        monitor._gaming_mode = True
+        monitor._gaming_mode_elevate_nice = True
+        info = {"pid": 101, "name": "game.exe", "nice": 5}
+
+        with mock.patch.object(engine, "matches_process", return_value=True), \
+             mock.patch.object(engine, "apply_to_process"):
+            monitor._apply_new_pid(info)
+
+        set_nice.assert_called_once_with(101, -1)
+        self.assertEqual(monitor._gaming_niced, {101: 5})
+
     def test_identity_and_metrics_are_collected_separately(self):
         proc = psutil.Process(os.getpid())
 

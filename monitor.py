@@ -256,11 +256,10 @@ class MonitorThread(QThread):
 
     def _restore_gaming_nices(self):
         """Restore nice values to original for all game processes we elevated."""
-        import cpu_park
         count = 0
         for pid, orig_nice in list(self._gaming_niced.items()):
             try:
-                if cpu_park.set_process_nice_via_helper(pid, orig_nice):
+                if utils.set_nice(pid, orig_nice):
                     count += 1
             except Exception:
                 pass
@@ -352,9 +351,8 @@ class MonitorThread(QThread):
             self._rule_engine.apply_to_process(pid, name)
             # Rule matched — if gaming mode + elevate_nice, apply nice -1
             if self._gaming_mode and self._gaming_mode_elevate_nice and pid not in self._gaming_niced:
-                import cpu_park
                 orig_nice = info.get("nice", 0)
-                if cpu_park.set_process_nice_via_helper(pid, -1):
+                if utils.set_nice(pid, -1):
                     self._gaming_niced[pid] = orig_nice
                     self._emit_log(f"[Gaming Mode] nice -1 → {name}({pid})")
         else:

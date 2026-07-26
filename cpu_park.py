@@ -440,15 +440,6 @@ def park_cpus(cpus: set[int], log_cb=None) -> bool:
     return ok
 
 
-def set_process_nice_via_helper(pid: int, nice_val: int) -> bool:
-    """Set process nice value via privileged helper (required for negative nice).
-    Returns True on success."""
-    ok, msg = _run_helper("renice-pid", str(nice_val), str(pid))
-    if not ok:
-        log.warning("renice-pid pid=%d nice=%d failed: %s", pid, nice_val, msg)
-    return ok
-
-
 def unpark_all(log_cb=None) -> bool:
     """Bring all offline CPUs back online."""
     offline = get_offline_cpus()
