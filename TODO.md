@@ -110,7 +110,7 @@ in the same phase.
   observed process snapshot while retaining the worker's mutable cache. Prove
   the queued boundary remains detached. Files: `process_info.py`, `monitor.py`,
   tests. Detailed reference: Phase 3.
-- [ ] **Chunk 7 — Joined process-policy view assembly.** Add
+- [x] **Chunk 7 — Joined process-policy view assembly.** Add
   `ProcessPolicyView` and construct it once per GUI refresh. Include read-only
   manual-suppression status. Do not migrate table rendering yet. Files:
   `process_info.py` or the model module, `monitor.py`/`main_window.py`, tests.

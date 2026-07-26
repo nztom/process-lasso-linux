@@ -16,6 +16,7 @@ from PyQt6.QtTest import QSignalSpy
 
 from gui.dialogs import NicePriorityDialog
 from gui.process_table import ProcessTable, _CLOCK_TICKS, _parse_thread_cpu_stat
+from process_info import ProcessPolicyView, ProcessSnapshot
 from rules import Rule, RuleEngine
 
 
@@ -317,6 +318,32 @@ class ProcessTableTests(unittest.TestCase):
 
         self.assertEqual(table.item(0, table.AFFINITY_ALWAYS_COLUMN).text(), "4-7")
         self.assertEqual(table.item(0, table.NICE_ALWAYS_COLUMN).text(), "Absolute -5")
+
+    def test_rule_refresh_rebuilds_policy_without_new_metrics_snapshot(self):
+        engine = RuleEngine()
+        rule = Rule(pattern="game.exe", match_type="exact", nice=-8)
+        engine.add_rule(rule)
+        observed = ProcessSnapshot(
+            pid=42, create_time=1.0, comm="game.exe", name="game.exe",
+            user="user", sudo=False, cpu_percent=10.0, mem_rss=1024,
+            nice=0, affinity="0-3", ionice="2/4", cmdline="game.exe",
+        )
+        view = ProcessPolicyView(
+            observed=observed,
+            effective_policy=engine.effective_policy(observed.name),
+        )
+        table = ProcessTable(engine, None)
+        table.set_hide_root(False)
+        table.update_snapshot([view])
+
+        rule.nice = -5
+        engine.update_rule(rule)
+        table.refresh_rule_columns()
+
+        rebuilt = table._snapshot[0]
+        self.assertIsInstance(rebuilt, ProcessPolicyView)
+        self.assertIs(rebuilt.observed, observed)
+        self.assertEqual(rebuilt.effective_policy.nice.value, -5)
 
     def test_offset_always_column_shows_policy_not_internal_nice_marker(self):
         engine = RuleEngine()

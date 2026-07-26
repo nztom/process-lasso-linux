@@ -11,7 +11,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from rules import RuleEngine
 from probalance import ProBalance
-from process_info import ProcessInfo, ProcessSnapshot
+from process_info import ProcessInfo, ProcessPolicyView, ProcessSnapshot
 import utils
 
 log = logging.getLogger(__name__)
@@ -181,7 +181,7 @@ class MonitorThread(QThread):
     - On new PID: applies matching rule, or default affinity if no rule matched
     """
 
-    process_snapshot_ready = pyqtSignal(list)    # list[ProcessSnapshot]
+    process_snapshot_ready = pyqtSignal(list)    # list[ProcessPolicyView]
     cpu_snapshot_ready     = pyqtSignal(list)    # emitted with list of per-CPU % floats
     log_message = pyqtSignal(str)                # log lines for UI
 
@@ -312,9 +312,25 @@ class MonitorThread(QThread):
         self._known_tids_by_pid.pop(pid, None)
         self._manually_overridden_pids.discard(pid)
 
-    def _snapshot_records(self) -> list[ProcessSnapshot]:
-        """Return records detached from the worker-owned mutable cache."""
-        return [ProcessSnapshot.from_info(info) for info in self._process_cache.values()]
+    def _observed_records(self) -> list[ProcessSnapshot]:
+        """Detach immutable observations from the worker-owned cache."""
+        return [
+            ProcessSnapshot.from_info(info)
+            for info in self._process_cache.values()
+        ]
+
+    def _snapshot_records(
+        self, observed_records: list[ProcessSnapshot] | None = None
+    ) -> list[ProcessPolicyView]:
+        """Join detached observations with policy once per display snapshot."""
+        views = []
+        for observed in observed_records or self._observed_records():
+            views.append(ProcessPolicyView(
+                observed=observed,
+                effective_policy=self._rule_engine.effective_policy(observed.name),
+                manually_overridden=observed.pid in self._manually_overridden_pids,
+            ))
+        return views
 
     def _apply_new_pid(self, info: ProcessInfo):
         """Apply rules or default affinity to a newly seen process."""
@@ -453,7 +469,7 @@ class MonitorThread(QThread):
                         _update_proc_metrics(proc, info, include_details=snapshot_due)
             # The GUI receives these across a queued signal. Copy nested
             # records so later worker updates cannot mutate UI-owned data.
-            snapshot = self._snapshot_records()
+            snapshot = self._observed_records()
 
             # ProBalance every 1.0s
             if pb_due:
@@ -467,7 +483,8 @@ class MonitorThread(QThread):
 
             # Snapshot emit every 2.0s
             if snapshot_due:
-                self.process_snapshot_ready.emit(list(snapshot))
+                views = self._snapshot_records(snapshot)
+                self.process_snapshot_ready.emit(views)
                 try:
                     raw = psutil.cpu_percent(percpu=True)
                     # psutil returns only ONLINE CPUs in cpu-number order.

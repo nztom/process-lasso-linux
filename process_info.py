@@ -5,6 +5,8 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import ClassVar, TypedDict
 
+from policy_models import EffectiveProcessPolicy
+
 
 class ProcessInfo(TypedDict):
     pid: int
@@ -75,3 +77,21 @@ class ProcessSnapshot(Mapping[str, object]):
 
     def __len__(self) -> int:
         return len(self._FIELDS)
+
+
+@dataclass(frozen=True)
+class ProcessPolicyView(Mapping[str, object]):
+    """Immutable observed state joined with effective and runtime policy."""
+
+    observed: ProcessSnapshot
+    effective_policy: EffectiveProcessPolicy
+    manually_overridden: bool = False
+
+    def __getitem__(self, key: str) -> object:
+        return self.observed[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.observed)
+
+    def __len__(self) -> int:
+        return len(self.observed)

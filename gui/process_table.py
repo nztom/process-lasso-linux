@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence
 
 import utils
-from process_info import ProcessInfo, ProcessSnapshot
+from process_info import ProcessInfo, ProcessPolicyView, ProcessSnapshot
 from gui.dialogs import AffinityDialog, NicePriorityDialog, IoNiceDialog, RuleEditDialog
 from gui.table_layout import configure_columns, reset_columns
 
@@ -138,7 +138,7 @@ class ProcessTable(QTableWidget):
         super().__init__(0, len(self.COLUMNS), parent)
         self._rule_engine = rule_engine
         self._log_callback = log_callback
-        self._snapshot: list[ProcessSnapshot] = []
+        self._snapshot: list[ProcessPolicyView | ProcessSnapshot | ProcessInfo] = []
         self._throttled_pids: set[int] = set()
         self._sort_col = 4   # CPU%
         self._sort_asc = False
@@ -231,7 +231,9 @@ class ProcessTable(QTableWidget):
     def update_throttled(self, throttled_pids: set[int]):
         self._throttled_pids = throttled_pids
 
-    def update_snapshot(self, snapshot: list[ProcessSnapshot]):
+    def update_snapshot(
+        self, snapshot: list[ProcessPolicyView | ProcessSnapshot | ProcessInfo]
+    ):
         self._snapshot = snapshot
         live_pids = {proc["pid"] for proc in snapshot}
         if self._thread_sampler is not None:
@@ -249,6 +251,18 @@ class ProcessTable(QTableWidget):
 
     def refresh_rule_columns(self):
         """Immediately redraw effective Always values after rule changes."""
+        if self._rule_engine is not None:
+            self._snapshot = [
+                ProcessPolicyView(
+                    observed=proc.observed,
+                    effective_policy=self._rule_engine.effective_policy(
+                        proc.observed.name
+                    ),
+                    manually_overridden=proc.manually_overridden,
+                )
+                if isinstance(proc, ProcessPolicyView) else proc
+                for proc in self._snapshot
+            ]
         self._refresh_display()
 
     def set_filter(self, text: str):
