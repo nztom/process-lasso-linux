@@ -19,8 +19,9 @@ each owner; it does not take ownership of subsystem internals.
 | `_affinity_drift_attempts` | RuleEngine | encoded boot/process/thread/rule identity | Current thread and rule identity | Process exit/PID reuse, rule edit/removal, rule reload, or successful convergence |
 | `_affinity_released` | RuleEngine | encoded boot/process/thread/rule identity | Current thread and rule identity | Process exit/PID reuse, rule edit/removal, or rule reload |
 | `ThreadPriorityState` ledgers | RuleEngine-owned component | persisted process/thread start-time identities | Until restoration or pruning proves the identity is gone | Pruned/flushed during process cleanup and normal enforcement; persistence supplies crash safety |
-| `_states` | ProBalance | PID | Current process identity while sampled | Process exit/PID reuse through the coordinator, or absence from a ProBalance snapshot |
+| `_states` | ProBalance | `ProcessIdentity(pid, create_time)` | Current process identity while sampled | Identity absence from a ProBalance snapshot, with coordinator cleanup retained as an eager path |
 
-PID-only keys remain intentionally unchanged in this chunk. Identity-key
-hardening is a separate task; the coordinator prevents stale PID-only state
-from surviving a reuse detected by Monitor.
+The remaining PID-only keys are protected by Monitor's synchronous reuse
+detection and centralized cleanup before a replacement is applied. ProBalance
+also consumes snapshots independently, so it uses `ProcessIdentity` to prevent
+state transfer even if a caller omits the eager cleanup notification.

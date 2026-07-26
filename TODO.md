@@ -131,7 +131,7 @@ in the same phase.
   every PID/TID-indexed collection and add one centralized exit/reuse cleanup
   coordinator. Do not relocate subsystem internals in this chunk. Files:
   `monitor.py`, `rules.py`, `probalance.py`, tests. Detailed reference: Phase 6.
-- [ ] **Chunk 12 — Identity-key hardening.** Introduce `ProcessIdentity` only
+- [x] **Chunk 12 — Identity-key hardening.** Introduce `ProcessIdentity` only
   where the Chunk 11 audit shows PID reuse can corrupt state. Migrate one state
   category at a time with tests. Detailed reference: Phase 6.
 - [ ] **Chunk 13 — Compatibility and formatting cleanup.** Remove the old

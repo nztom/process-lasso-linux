@@ -10,9 +10,30 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from probalance import ProBalance
+from process_info import ProcessIdentity
 
 
 class ProBalanceTests(unittest.TestCase):
+    def test_pid_reuse_does_not_inherit_previous_process_state(self):
+        probalance = ProBalance({"enabled": True})
+        probalance.tick([{
+            "pid": 101, "create_time": 1.0, "name": "old",
+            "cpu_percent": 0.0, "nice": 5,
+        }], 1.0)
+
+        probalance.tick([{
+            "pid": 101, "create_time": 2.0, "name": "replacement",
+            "cpu_percent": 0.0, "nice": -5,
+        }], 1.0)
+
+        self.assertEqual(
+            list(probalance._states),
+            [ProcessIdentity(pid=101, create_time=2.0)],
+        )
+        self.assertEqual(
+            probalance._states[ProcessIdentity(101, 2.0)].original_nice,
+            -5,
+        )
     @mock.patch("probalance.utils.set_nice")
     def test_never_throttles_its_own_process(self, set_nice):
         probalance = ProBalance({

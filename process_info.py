@@ -8,6 +8,21 @@ from typing import ClassVar, TypedDict
 from policy_models import EffectiveProcessPolicy
 
 
+@dataclass(frozen=True)
+class ProcessIdentity:
+    """Stable identity for one lifetime of a Linux process ID."""
+
+    pid: int
+    create_time: float
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> "ProcessIdentity":
+        return cls(
+            pid=int(record["pid"]),
+            create_time=float(record.get("create_time", 0.0)),
+        )
+
+
 class ProcessInfo(TypedDict):
     pid: int
     create_time: float

@@ -7,7 +7,12 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import utils
-from process_info import ProcessInfo, ProcessPolicyView, ProcessSnapshot
+from process_info import (
+    ProcessIdentity,
+    ProcessInfo,
+    ProcessPolicyView,
+    ProcessSnapshot,
+)
 
 log = logging.getLogger(__name__)
 
@@ -27,7 +32,7 @@ class ProBalance:
     def __init__(self, config: dict, log_callback=None):
         self._cfg = config
         self._log_callback = log_callback
-        self._states: dict[int, _ProcState] = {}  # pid → state
+        self._states: dict[ProcessIdentity, _ProcState] = {}
 
     def update_config(self, config: dict):
         was_enabled = self._cfg.get("enabled", True)
@@ -37,16 +42,16 @@ class ProBalance:
 
     def _restore_all_throttled(self):
         """Restore every process currently throttled by ProBalance."""
-        for pid, state in self._states.items():
+        for identity, state in self._states.items():
             if state.state != "THROTTLED":
                 continue
 
             original_nice = state.original_nice
             if original_nice is None:
                 original_nice = 0
-            if utils.set_nice(pid, original_nice):
+            if utils.set_nice(identity.pid, original_nice):
                 self._log(
-                    f"[ProBalance] RESTORE pid={pid} nice→{original_nice} "
+                    f"[ProBalance] RESTORE pid={identity.pid} nice→{original_nice} "
                     "(ProBalance disabled)"
                 )
                 state.state = "NORMAL"
@@ -60,7 +65,11 @@ class ProBalance:
 
     def forget_pid(self, pid: int):
         """Discard runtime state when a process exits or its PID is reused."""
-        self._states.pop(pid, None)
+        self._states = {
+            identity: state
+            for identity, state in self._states.items()
+            if identity.pid != pid
+        }
 
     def _log(self, msg: str):
         log.info(msg)
@@ -95,15 +104,16 @@ class ProBalance:
         restore_threshold = self._cfg.get("restore_threshold_percent", 40.0)
         restore_hysteresis = self._cfg.get("restore_hysteresis_seconds", 5)
 
-        alive_pids = {p["pid"] for p in snapshot}
+        alive_identities = {ProcessIdentity.from_record(p) for p in snapshot}
 
         # Clean up dead processes
-        dead = [pid for pid in self._states if pid not in alive_pids]
-        for pid in dead:
-            del self._states[pid]
+        dead = [identity for identity in self._states if identity not in alive_identities]
+        for identity in dead:
+            del self._states[identity]
 
         for proc in snapshot:
             pid = proc["pid"]
+            identity = ProcessIdentity.from_record(proc)
             name = proc["name"]
             cpu = proc.get("cpu_percent", 0.0)
             current_nice = proc.get("nice", 0)
@@ -111,10 +121,10 @@ class ProBalance:
             if pid == os.getpid() or self._is_exempt(name):
                 continue
 
-            if pid not in self._states:
-                self._states[pid] = _ProcState(original_nice=current_nice)
+            if identity not in self._states:
+                self._states[identity] = _ProcState(original_nice=current_nice)
 
-            state = self._states[pid]
+            state = self._states[identity]
 
             if state.state == "NORMAL":
                 if cpu > threshold:
@@ -155,4 +165,8 @@ class ProBalance:
                     state.consecutive_low = 0.0
 
     def get_throttled_pids(self) -> set[int]:
-        return {pid for pid, s in self._states.items() if s.state == "THROTTLED"}
+        return {
+            identity.pid
+            for identity, state in self._states.items()
+            if state.state == "THROTTLED"
+        }

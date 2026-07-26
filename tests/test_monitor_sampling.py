@@ -13,7 +13,7 @@ import psutil
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from monitor import MonitorThread, _safe_proc_identity, _update_proc_metrics
-from process_info import ProcessPolicyView, ProcessSnapshot
+from process_info import ProcessIdentity, ProcessPolicyView, ProcessSnapshot
 from probalance import ProBalance
 from rules import Rule, RuleEngine
 
@@ -94,7 +94,7 @@ class MonitorSamplingTests(unittest.TestCase):
         engine._affinity_drift_attempts["boot:7:1:7:2:policy"] = 3
         engine._affinity_released.add("boot:7:1:7:2:policy")
         probalance = ProBalance({})
-        probalance._states[7] = mock.Mock()
+        probalance._states[ProcessIdentity(7, 1.0)] = mock.Mock()
         monitor = MonitorThread(engine, probalance, {})
         monitor._known_pids = {7}
         monitor._process_cache = {
@@ -113,7 +113,7 @@ class MonitorSamplingTests(unittest.TestCase):
         self.assertNotIn(7, monitor._gaming_niced)
         self.assertNotIn(7, monitor._known_tids_by_pid)
         self.assertNotIn(7, monitor._manually_overridden_pids)
-        self.assertNotIn(7, probalance._states)
+        self.assertFalse(any(key.pid == 7 for key in probalance._states))
         self.assertNotIn(7, engine._attempts_by_rule[rule.rule_id])
         self.assertNotIn((rule.rule_id, 7), engine._suppressed_rule_pids)
         self.assertFalse(engine._affinity_seen)
@@ -157,7 +157,7 @@ class MonitorSamplingTests(unittest.TestCase):
         monitor._gaming_niced[7] = 0
         monitor._known_tids_by_pid[7] = {7, 8}
         monitor._manually_overridden_pids.add(7)
-        probalance._states[7] = mock.Mock()
+        probalance._states[ProcessIdentity(7, 1.0)] = mock.Mock()
         proc = mock.Mock(pid=7)
         proc.create_time.return_value = 2.0
         proc.name.return_value = "game"
@@ -175,7 +175,7 @@ class MonitorSamplingTests(unittest.TestCase):
         self.assertNotIn(7, monitor._gaming_niced)
         self.assertNotIn(7, monitor._known_tids_by_pid)
         self.assertNotIn(7, monitor._manually_overridden_pids)
-        self.assertNotIn(7, probalance._states)
+        self.assertFalse(any(key.pid == 7 for key in probalance._states))
         self.assertNotIn(7, engine._attempts_by_rule[rule.rule_id])
         self.assertNotIn((rule.rule_id, 7), engine._suppressed_rule_pids)
         self.assertFalse(engine._affinity_seen)
