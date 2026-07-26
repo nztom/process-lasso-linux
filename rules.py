@@ -218,30 +218,6 @@ class RuleEngine:
             ionice=ionice,
         )
 
-    def effective_settings(self, proc_name: str) -> dict:
-        """Return the legacy dictionary view of :meth:`effective_policy`."""
-        policy = self.effective_policy(proc_name)
-        settings = {
-            "affinity": policy.affinity,
-            "nice": policy.nice.value if isinstance(
-                policy.nice, AbsoluteNicePolicy
-            ) else 0 if isinstance(policy.nice, OffsetNicePolicy) else None,
-            "ionice_class": (
-                policy.ionice.io_class if policy.ionice is not None else None
-            ),
-            "ionice_level": (
-                policy.ionice.level if policy.ionice is not None else None
-            ),
-        }
-        if isinstance(policy.nice, OffsetNicePolicy):
-            settings.update({
-                "nice_mode": "offset",
-                "nice_offset": policy.nice.offset,
-                "nice_floor": policy.nice.floor,
-                "nice_ceiling": policy.nice.ceiling,
-            })
-        return settings
-
     def forget_pid(self, pid: int):
         """Discard runtime attempt state after a process exits."""
         for attempts in self._attempts_by_rule.values():

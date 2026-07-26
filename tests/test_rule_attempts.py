@@ -9,6 +9,7 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from rules import Rule, RuleEngine, RULE_APPLY_ATTEMPTS
+from policy_models import AbsoluteNicePolicy, EffectiveProcessPolicy, IoPriorityPolicy
 
 
 class RuleAttemptTests(unittest.TestCase):
@@ -126,7 +127,7 @@ class RuleAttemptTests(unittest.TestCase):
 
         self.assertTrue(rule.matches("BlackDesert64.exe"))
 
-    def test_effective_settings_use_last_matching_value_per_field(self):
+    def test_effective_policy_uses_last_matching_value_per_field(self):
         self.engine.add_rule(Rule(
             name="Priority",
             pattern="game.exe",
@@ -143,12 +144,14 @@ class RuleAttemptTests(unittest.TestCase):
             ionice_class=3,
         ))
 
-        self.assertEqual(self.engine.effective_settings("game.exe"), {
-            "affinity": "4-7",
-            "nice": -10,
-            "ionice_class": 3,
-            "ionice_level": None,
-        })
+        self.assertEqual(
+            self.engine.effective_policy("game.exe"),
+            EffectiveProcessPolicy(
+                affinity="4-7",
+                nice=AbsoluteNicePolicy(-10),
+                ionice=IoPriorityPolicy(3),
+            ),
+        )
 
     @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_new_thread_receives_matching_affinity_rule(self, set_affinity):

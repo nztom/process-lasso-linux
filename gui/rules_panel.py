@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 import json
 
+from policy_models import AbsoluteNicePolicy, OffsetNicePolicy, format_nice_policy
 from rules import RuleEngine, Rule
 from gui.dialogs import RuleEditDialog
 from gui.table_layout import configure_columns, reset_columns
@@ -98,6 +99,15 @@ class RulesPanel(QWidget):
         rules = self._engine.get_rules()
         self._table.setRowCount(len(rules))
         for row, rule in enumerate(rules):
+            nice_policy = None
+            if rule.nice is not None:
+                nice_policy = (
+                    OffsetNicePolicy(
+                        rule.nice_offset, rule.nice_floor, rule.nice_ceiling
+                    )
+                    if rule.nice_mode == "offset"
+                    else AbsoluteNicePolicy(rule.nice)
+                )
             items = [
                 "Yes" if rule.enabled else "No",
                 "Yes" if rule.force_apply else "No",
@@ -105,9 +115,7 @@ class RulesPanel(QWidget):
                 rule.pattern,
                 rule.match_type,
                 rule.affinity or "",
-                (f"Offset {rule.nice_offset:+d} [{rule.nice_floor}, {rule.nice_ceiling}]"
-                 if rule.nice is not None and rule.nice_mode == "offset"
-                 else f"Absolute {rule.nice}" if rule.nice is not None else ""),
+                format_nice_policy(nice_policy),
                 str(rule.ionice_class) if rule.ionice_class is not None else "",
                 str(rule.ionice_level) if rule.ionice_level is not None else "",
             ]

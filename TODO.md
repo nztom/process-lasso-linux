@@ -134,7 +134,7 @@ in the same phase.
 - [x] **Chunk 12 — Identity-key hardening.** Introduce `ProcessIdentity` only
   where the Chunk 11 audit shows PID reuse can corrupt state. Migrate one state
   category at a time with tests. Detailed reference: Phase 6.
-- [ ] **Chunk 13 — Compatibility and formatting cleanup.** Remove the old
+- [x] **Chunk 13 — Compatibility and formatting cleanup.** Remove the old
   effective-policy dictionary adapter and consolidate pure formatters after all
   GUI consumers are typed. Files: model/rule modules and GUI tests. Detailed
   reference: Phase 7.

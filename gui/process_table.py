@@ -22,8 +22,8 @@ from process_info import (
 )
 from policy_models import (
     EffectiveProcessPolicy,
-    IoPriorityPolicy,
     OffsetNicePolicy,
+    format_io_priority_policy,
     format_nice_policy,
 )
 from gui.dialogs import AffinityDialog, NicePriorityDialog, IoNiceDialog, RuleEditDialog
@@ -320,11 +320,11 @@ class ProcessTable(QTableWidget):
             4: lambda p: p["cpu_percent"],
             5: lambda p: p["mem_rss"],
             6: lambda p: p["nice"],
-            7: lambda p: self._format_priority_policy(effective_policy(p)),
+            7: lambda p: format_nice_policy(effective_policy(p).nice),
             8: lambda p: p["affinity"],
             9: lambda p: effective_policy(p).affinity or "",
             10: lambda p: p["ionice"],
-            11: lambda p: self._format_ionice_policy(effective_policy(p).ionice),
+            11: lambda p: format_io_priority_policy(effective_policy(p).ionice),
             12: lambda p: "",
             13: lambda p: p.get("cmdline", "").lower(),
         }
@@ -380,11 +380,11 @@ class ProcessTable(QTableWidget):
                 f"{cpu:.1f}",
                 f"{proc['mem_rss'] / 1_048_576:.1f}",
                 str(proc["nice"]),
-                self._format_priority_policy(policy),
+                format_nice_policy(policy.nice),
                 proc.get("affinity", ""),
                 policy.affinity or "",
                 proc.get("ionice", ""),
-                self._format_ionice_policy(policy.ionice),
+                format_io_priority_policy(policy.ionice),
                 "⏸ Throttled" if throttled else "",
                 proc.get("cmdline", ""),
             ]
@@ -427,11 +427,6 @@ class ProcessTable(QTableWidget):
             for thread in threads_by_pid.get(pid, []):
                 self._render_thread_row(row, proc, thread)
                 row += 1
-
-    @staticmethod
-    def _format_priority_policy(policy: EffectiveProcessPolicy) -> str:
-        """Render the typed effective CPU-priority policy."""
-        return format_nice_policy(policy.nice) if policy.nice is not None else ""
 
     def _render_thread_row(
         self, row: int, proc: ProcessPolicyView, thread: ThreadSnapshot
@@ -490,23 +485,6 @@ class ProcessTable(QTableWidget):
         }
         label = labels.get(value)
         return f"{label} ({value})" if label else str(value)
-
-    @staticmethod
-    def _format_ionice_policy(policy: IoPriorityPolicy | None) -> str:
-        if policy is None:
-            return ""
-        io_class = policy.io_class
-        level = policy.level
-        labels = {
-            (2, 0): "High",
-            (2, 4): "Normal",
-            (2, 7): "Low",
-            (3, None): "Very Low",
-        }
-        lookup_level = None if io_class == 3 else level
-        label = labels.get((io_class, lookup_level), "Custom")
-        raw = str(io_class) if level is None else f"{io_class}/{level}"
-        return f"{label} ({raw})"
 
     def _selected_proc(self) -> ProcessPolicyView | None:
         rows = self.selectedItems()

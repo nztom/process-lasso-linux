@@ -62,10 +62,31 @@ class EffectiveProcessPolicy:
     ionice: IoPriorityPolicy | None = None
 
 
-def format_nice_policy(policy: NicePolicy) -> str:
+def format_nice_policy(policy: NicePolicy | None) -> str:
     """Return the stable user-facing representation of a nice policy."""
+    if policy is None:
+        return ""
     if isinstance(policy, AbsoluteNicePolicy):
         return f"Absolute {policy.value}"
     if isinstance(policy, OffsetNicePolicy):
         return f"Offset {policy.offset:+d} [{policy.floor}, {policy.ceiling}]"
     raise TypeError(f"unsupported nice policy: {type(policy).__name__}")
+
+
+def format_io_priority_policy(policy: IoPriorityPolicy | None) -> str:
+    """Return the stable user-facing representation of an I/O policy."""
+    if policy is None:
+        return ""
+    labels = {
+        (2, 0): "High",
+        (2, 4): "Normal",
+        (2, 7): "Low",
+        (3, None): "Very Low",
+    }
+    lookup_level = None if policy.io_class == 3 else policy.level
+    label = labels.get((policy.io_class, lookup_level), "Custom")
+    raw = (
+        str(policy.io_class)
+        if policy.level is None else f"{policy.io_class}/{policy.level}"
+    )
+    return f"{label} ({raw})"

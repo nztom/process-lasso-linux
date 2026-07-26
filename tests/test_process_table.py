@@ -411,8 +411,6 @@ class ProcessTableTests(unittest.TestCase):
 
         lookup_error = AssertionError("rendering queried the rule engine")
         with mock.patch.object(
-            engine, "effective_settings", side_effect=lookup_error,
-        ), mock.patch.object(
             engine, "effective_policy", side_effect=lookup_error,
         ):
             table.update_snapshot(views)

@@ -9,6 +9,7 @@ from policy_models import (
     EffectiveProcessPolicy,
     IoPriorityPolicy,
     OffsetNicePolicy,
+    format_io_priority_policy,
     format_nice_policy,
 )
 
@@ -75,9 +76,8 @@ class OffsetNicePolicyTests(unittest.TestCase):
             "Offset +5 [-10, 15]",
         )
 
-    def test_formatter_rejects_unknown_values(self):
-        with self.assertRaises(TypeError):
-            format_nice_policy(None)
+    def test_empty_policy_formats_as_empty_text(self):
+        self.assertEqual(format_nice_policy(None), "")
 
 
 class EffectiveProcessPolicyTests(unittest.TestCase):
@@ -98,3 +98,9 @@ class EffectiveProcessPolicyTests(unittest.TestCase):
         for io_class, level in ((-1, 0), (4, 0), (2, -1), (2, 8), (True, 0)):
             with self.subTest(io_class=io_class, level=level), self.assertRaises(ValueError):
                 IoPriorityPolicy(io_class, level)
+
+    def test_io_policy_formatting_covers_known_custom_and_empty_values(self):
+        self.assertEqual(format_io_priority_policy(IoPriorityPolicy(2, 4)), "Normal (2/4)")
+        self.assertEqual(format_io_priority_policy(IoPriorityPolicy(3)), "Very Low (3)")
+        self.assertEqual(format_io_priority_policy(IoPriorityPolicy(1, 2)), "Custom (1/2)")
+        self.assertEqual(format_io_priority_policy(None), "")
