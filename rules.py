@@ -46,6 +46,16 @@ class Rule:
             raise ValueError("nice bounds must satisfy -20 <= floor <= ceiling <= 19")
         if self.nice is not None and not -20 <= self.nice <= 19:
             raise ValueError("nice must be between -20 and 19")
+        if self.ionice_class is not None and (
+            type(self.ionice_class) is not int
+            or not 0 <= self.ionice_class <= 3
+        ):
+            raise ValueError("ionice_class must be an integer from 0 to 3")
+        if self.ionice_level is not None and (
+            type(self.ionice_level) is not int
+            or not 0 <= self.ionice_level <= 7
+        ):
+            raise ValueError("ionice_level must be None or an integer from 0 to 7")
 
     @classmethod
     def from_dict(cls, d: dict) -> "Rule":
@@ -59,6 +69,12 @@ class Rule:
         nice = d.get("nice")
         if nice is not None and not -20 <= int(nice) <= 19:
             raise ValueError("nice must be between -20 and 19")
+        ionice_class = d.get("ionice_class")
+        ionice_level = d.get("ionice_level")
+        if ionice_class is not None:
+            ionice_class = int(ionice_class)
+        if ionice_level is not None:
+            ionice_level = int(ionice_level)
         return cls(
             rule_id=d.get("rule_id", str(uuid.uuid4())),
             name=d.get("name", ""),
@@ -70,8 +86,8 @@ class Rule:
             nice_offset=int(d.get("nice_offset", 0)),
             nice_floor=floor,
             nice_ceiling=ceiling,
-            ionice_class=d.get("ionice_class"),
-            ionice_level=d.get("ionice_level"),
+            ionice_class=ionice_class,
+            ionice_level=ionice_level,
             enabled=d.get("enabled", True),
             force_apply=d.get("force_apply", False),
         )

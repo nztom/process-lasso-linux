@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import psutil
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -24,6 +25,7 @@ class _ProcState:
     consecutive_low: float = 0.0   # seconds spent below restore threshold
     original_nice: Optional[int] = None
     throttle_nice: Optional[int] = None
+    process_name: str = ""
 
 
 class ProBalance:
@@ -39,11 +41,27 @@ class ProBalance:
         self._cfg = config
         if was_enabled and not config.get("enabled", True):
             self._restore_all_throttled()
+        elif config.get("enabled", True):
+            self._restore_exempt_throttled()
+
+    @staticmethod
+    def _identity_is_current(identity: ProcessIdentity) -> bool:
+        """Return whether PID still names the process that owns this state."""
+        # Zero is retained only for legacy/test mappings that lack create_time.
+        if identity.create_time == 0.0:
+            return True
+        try:
+            return psutil.Process(identity.pid).create_time() == identity.create_time
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return False
 
     def _restore_all_throttled(self):
         """Restore every process currently throttled by ProBalance."""
-        for identity, state in self._states.items():
+        for identity, state in list(self._states.items()):
             if state.state != "THROTTLED":
+                continue
+            if not self._identity_is_current(identity):
+                self._states.pop(identity, None)
                 continue
 
             original_nice = state.original_nice
@@ -59,6 +77,22 @@ class ProBalance:
                 state.consecutive_low = 0.0
                 state.original_nice = original_nice
                 state.throttle_nice = None
+
+    def _restore_exempt_throttled(self):
+        """Immediately restore processes newly covered by the exempt list."""
+        for identity, state in list(self._states.items()):
+            if state.state != "THROTTLED" or not self._is_exempt(state.process_name):
+                continue
+            if not self._identity_is_current(identity):
+                self._states.pop(identity, None)
+                continue
+            original_nice = state.original_nice if state.original_nice is not None else 0
+            if utils.set_nice(identity.pid, original_nice):
+                self._log(
+                    f"[ProBalance] RESTORE {state.process_name}({identity.pid}) "
+                    f"nice→{original_nice} (process exempted)"
+                )
+                self._states.pop(identity, None)
 
     def set_log_callback(self, cb):
         self._log_callback = cb
@@ -94,6 +128,12 @@ class ProBalance:
         if not self._cfg.get("enabled", True):
             # update_config() restores immediately; retry here in case a process
             # temporarily rejected that first attempt.
+            alive_identities = {ProcessIdentity.from_record(p) for p in snapshot}
+            self._states = {
+                identity: state
+                for identity, state in self._states.items()
+                if identity in alive_identities
+            }
             self._restore_all_throttled()
             return
 
@@ -118,13 +158,25 @@ class ProBalance:
             cpu = proc.get("cpu_percent", 0.0)
             current_nice = proc.get("nice", 0)
 
-            if pid == os.getpid() or self._is_exempt(name):
+            if pid == os.getpid():
+                continue
+
+            if self._is_exempt(name):
+                state = self._states.get(identity)
+                if state is not None:
+                    state.process_name = name
+                    if state.state == "THROTTLED":
+                        self._restore_exempt_throttled()
                 continue
 
             if identity not in self._states:
-                self._states[identity] = _ProcState(original_nice=current_nice)
+                self._states[identity] = _ProcState(
+                    original_nice=current_nice,
+                    process_name=name,
+                )
 
             state = self._states[identity]
+            state.process_name = name
 
             if state.state == "NORMAL":
                 if cpu > threshold:

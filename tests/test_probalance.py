@@ -9,11 +9,89 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from probalance import ProBalance
+from probalance import ProBalance, _ProcState
 from process_info import ProcessIdentity
 
 
 class ProBalanceTests(unittest.TestCase):
+    @mock.patch("probalance.utils.set_nice", return_value=True)
+    def test_adding_exemption_immediately_restores_throttled_process(self, set_nice):
+        config = {
+            "enabled": True,
+            "cpu_threshold_percent": 1.0,
+            "consecutive_seconds": 0,
+            "nice_adjustment": 10,
+            "nice_floor": 15,
+            "exempt_patterns": [],
+        }
+        probalance = ProBalance(config)
+        snapshot = [{
+            "pid": 101, "name": "game.exe", "cpu_percent": 100.0, "nice": 0,
+        }]
+        probalance.tick(snapshot, 1.0)
+
+        probalance.update_config({**config, "exempt_patterns": ["game"]})
+
+        self.assertEqual(
+            set_nice.call_args_list,
+            [mock.call(101, 10), mock.call(101, 0)],
+        )
+        self.assertEqual(probalance.get_throttled_pids(), set())
+
+    @mock.patch("probalance.utils.set_nice", side_effect=[True, False, True])
+    def test_exempt_restore_retries_on_next_tick(self, set_nice):
+        config = {
+            "enabled": True,
+            "cpu_threshold_percent": 1.0,
+            "consecutive_seconds": 0,
+            "exempt_patterns": [],
+        }
+        snapshot = [{
+            "pid": 101, "name": "game.exe", "cpu_percent": 100.0, "nice": 0,
+        }]
+        probalance = ProBalance(config)
+        probalance.tick(snapshot, 1.0)
+
+        probalance.update_config({**config, "exempt_patterns": ["game"]})
+        self.assertEqual(probalance.get_throttled_pids(), {101})
+
+        probalance.tick(snapshot, 1.0)
+
+        self.assertEqual(probalance.get_throttled_pids(), set())
+        self.assertEqual(set_nice.call_count, 3)
+
+    @mock.patch("probalance.utils.set_nice", return_value=True)
+    def test_disabled_tick_drops_reused_identity_without_restoring_it(self, set_nice):
+        probalance = ProBalance({"enabled": False})
+        old_identity = ProcessIdentity(101, 1.0)
+        probalance._states[old_identity] = _ProcState(
+            state="THROTTLED", original_nice=0, throttle_nice=10
+        )
+
+        probalance.tick([{
+            "pid": 101, "create_time": 2.0, "name": "replacement",
+            "cpu_percent": 0.0, "nice": 5,
+        }], 1.0)
+
+        set_nice.assert_not_called()
+        self.assertEqual(probalance._states, {})
+
+    @mock.patch("probalance.psutil.Process")
+    @mock.patch("probalance.utils.set_nice", return_value=True)
+    def test_disabling_drops_stale_identity_before_immediate_restore(
+        self, set_nice, process
+    ):
+        process.return_value.create_time.return_value = 2.0
+        probalance = ProBalance({"enabled": True})
+        probalance._states[ProcessIdentity(101, 1.0)] = _ProcState(
+            state="THROTTLED", original_nice=0, throttle_nice=10
+        )
+
+        probalance.update_config({"enabled": False})
+
+        set_nice.assert_not_called()
+        self.assertEqual(probalance._states, {})
+
     def test_pid_reuse_does_not_inherit_previous_process_state(self):
         probalance = ProBalance({"enabled": True})
         probalance.tick([{

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -10,11 +11,17 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from rules import Rule, RuleEngine, RULE_APPLY_ATTEMPTS
 from policy_models import AbsoluteNicePolicy, EffectiveProcessPolicy, IoPriorityPolicy
+from thread_priority_state import ThreadPriorityState
 
 
 class RuleAttemptTests(unittest.TestCase):
     def setUp(self):
-        self.engine = RuleEngine()
+        self.temp = tempfile.TemporaryDirectory()
+        priority_state = ThreadPriorityState(
+            pathlib.Path(self.temp.name) / "priority-state.json"
+        )
+        priority_state.boot_id = "boot"
+        self.engine = RuleEngine(priority_state)
         self.rule = Rule(name="Game", pattern="game.exe", match_type="exact", affinity="0-3")
         self.engine.add_rule(self.rule)
         self.tids = mock.patch("rules.utils.get_process_tids", side_effect=lambda pid: [pid])
@@ -31,6 +38,7 @@ class RuleAttemptTests(unittest.TestCase):
 
     def tearDown(self):
         mock.patch.stopall()
+        self.temp.cleanup()
 
     @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_rule_stops_after_ten_attempts(self, set_affinity):

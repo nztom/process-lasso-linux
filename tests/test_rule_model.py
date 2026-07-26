@@ -13,6 +13,23 @@ from rules import Rule, RuleEngine
 
 
 class EffectivePolicyMergeTests(unittest.TestCase):
+    def test_invalid_imported_io_policy_is_rejected_during_load(self):
+        engine = RuleEngine()
+
+        engine.load_rules([{
+            "pattern": "game",
+            "ionice_class": 99,
+            "ionice_level": 99,
+        }])
+
+        self.assertEqual(engine.get_rules(), [])
+        self.assertEqual(engine.effective_policy("game"), EffectiveProcessPolicy())
+
+    def test_direct_rule_rejects_invalid_io_policy(self):
+        for io_class, level in ((-1, 0), (4, 0), (2, -1), (2, 8)):
+            with self.subTest(io_class=io_class, level=level), self.assertRaises(ValueError):
+                Rule(pattern="game", ionice_class=io_class, ionice_level=level)
+
     def test_later_matching_rules_win_independently_per_field(self):
         engine = RuleEngine()
         engine.add_rule(Rule(
