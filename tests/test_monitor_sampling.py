@@ -5,6 +5,7 @@ import os
 import pathlib
 import sys
 import unittest
+from dataclasses import FrozenInstanceError
 from unittest import mock
 
 import psutil
@@ -12,6 +13,7 @@ import psutil
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from monitor import MonitorThread, _safe_proc_identity, _update_proc_metrics
+from process_info import ProcessSnapshot
 from probalance import ProBalance
 from rules import Rule, RuleEngine
 
@@ -32,17 +34,34 @@ class MonitorSamplingTests(unittest.TestCase):
 
     def test_snapshot_records_are_detached_from_worker_cache(self):
         monitor = MonitorThread(RuleEngine(), ProBalance({}), {})
-        monitor._process_cache = {7: {"pid": 7, "cpu_percent": 1.0}}
+        monitor._process_cache = {7: {
+            "pid": 7,
+            "create_time": 1.0,
+            "comm": "worker",
+            "name": "worker",
+            "user": "user",
+            "sudo": False,
+            "cpu_percent": 1.0,
+            "mem_rss": 1024,
+            "nice": 0,
+            "affinity": "0-3",
+            "ionice": "2/4",
+            "cmdline": "/usr/bin/worker",
+        }}
 
         snapshot = monitor._snapshot_records()
         monitor._process_cache[7]["cpu_percent"] = 99.0
-        snapshot[0]["pid"] = 8
         snapshot.append({"pid": 9})
 
+        self.assertIsInstance(snapshot[0], ProcessSnapshot)
         self.assertEqual(snapshot[0]["cpu_percent"], 1.0)
-        self.assertEqual(monitor._process_cache, {
-            7: {"pid": 7, "cpu_percent": 99.0}
-        })
+        self.assertEqual(monitor._process_cache[7]["pid"], 7)
+        self.assertEqual(monitor._process_cache[7]["cpu_percent"], 99.0)
+
+        with self.assertRaises(FrozenInstanceError):
+            snapshot[0].pid = 8
+        with self.assertRaises(TypeError):
+            snapshot[0]["pid"] = 8
 
     def test_process_exit_clears_all_transient_state(self):
         engine = RuleEngine()

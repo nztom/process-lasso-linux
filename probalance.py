@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import utils
-from process_info import ProcessInfo
+from process_info import ProcessInfo, ProcessSnapshot
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +72,9 @@ class ProBalance:
         name_lower = name.lower()
         return any(p.lower() in name_lower for p in patterns)
 
-    def tick(self, snapshot: list[ProcessInfo], tick_seconds: float):
+    def tick(
+        self, snapshot: list[ProcessInfo | ProcessSnapshot], tick_seconds: float
+    ):
         """
         Called every ProBalance update interval.
         snapshot: list of dicts with keys: pid, name, cpu_percent, nice

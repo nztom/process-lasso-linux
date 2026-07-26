@@ -106,7 +106,7 @@ in the same phase.
   `EffectiveProcessPolicy`, implement the authoritative merge in `RuleEngine`,
   and retain the old dictionary API as a compatibility adapter. Files:
   `rules.py`, the new model module, tests. Detailed reference: Phase 2.
-- [ ] **Chunk 6 — Immutable observed snapshot.** Introduce an immutable GUI-safe
+- [x] **Chunk 6 — Immutable observed snapshot.** Introduce an immutable GUI-safe
   observed process snapshot while retaining the worker's mutable cache. Prove
   the queued boundary remains detached. Files: `process_info.py`, `monitor.py`,
   tests. Detailed reference: Phase 3.

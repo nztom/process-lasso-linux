@@ -11,7 +11,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from rules import RuleEngine
 from probalance import ProBalance
-from process_info import ProcessInfo
+from process_info import ProcessInfo, ProcessSnapshot
 import utils
 
 log = logging.getLogger(__name__)
@@ -181,7 +181,7 @@ class MonitorThread(QThread):
     - On new PID: applies matching rule, or default affinity if no rule matched
     """
 
-    process_snapshot_ready = pyqtSignal(list)    # emitted with list of proc dicts
+    process_snapshot_ready = pyqtSignal(list)    # list[ProcessSnapshot]
     cpu_snapshot_ready     = pyqtSignal(list)    # emitted with list of per-CPU % floats
     log_message = pyqtSignal(str)                # log lines for UI
 
@@ -312,9 +312,9 @@ class MonitorThread(QThread):
         self._known_tids_by_pid.pop(pid, None)
         self._manually_overridden_pids.discard(pid)
 
-    def _snapshot_records(self) -> list[ProcessInfo]:
+    def _snapshot_records(self) -> list[ProcessSnapshot]:
         """Return records detached from the worker-owned mutable cache."""
-        return [dict(info) for info in self._process_cache.values()]
+        return [ProcessSnapshot.from_info(info) for info in self._process_cache.values()]
 
     def _apply_new_pid(self, info: ProcessInfo):
         """Apply rules or default affinity to a newly seen process."""
@@ -414,7 +414,7 @@ class MonitorThread(QThread):
         enforce_interval = self._config.get("monitor", {}).get("rule_enforce_interval_ms", 500) / 1000.0
         snapshot_interval = self._config.get("monitor", {}).get("display_refresh_interval_ms", 2000) / 1000.0
 
-        snapshot: list[dict] = []
+        snapshot: list[ProcessSnapshot] = []
 
         while not self._stop:
           try:
