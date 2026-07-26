@@ -115,19 +115,19 @@ in the same phase.
   manual-suppression status. Do not migrate table rendering yet. Files:
   `process_info.py` or the model module, `monitor.py`/`main_window.py`, tests.
   Detailed reference: Phase 3.
-- [ ] **Chunk 8 — Process-table rendering migration.** Move sorting and Current/
+- [x] **Chunk 8 — Process-table rendering migration.** Move sorting and Current/
   Always column rendering to the joined view. Remove repeated effective-policy
   lookups from rendering only. Files: `gui/process_table.py` and tests. Detailed
   reference: Phase 4.
-- [ ] **Chunk 9 — Context-menu migration.** Move affinity, priority, I/O, and
+- [x] **Chunk 9 — Context-menu migration.** Move affinity, priority, I/O, and
   Clear Rules context actions to typed view inputs. Preserve manual suppression
   and unchanged-offset behavior. Files: `gui/process_table.py`,
   `gui/dialogs.py`, tests. Detailed reference: Phase 4.
-- [ ] **Chunk 10 — Typed thread snapshots.** Replace expanded-row dictionaries
+- [x] **Chunk 10 — Typed thread snapshots.** Replace expanded-row dictionaries
   with `ThreadSnapshot` while preserving lazy sampling and TID start-time
   identity. Files: `process_info.py`, `gui/process_table.py`, tests. Detailed
   reference: Phase 5.
-- [ ] **Chunk 11 — Runtime-state ownership audit and cleanup contract.** Document
+- [x] **Chunk 11 — Runtime-state ownership audit and cleanup contract.** Document
   every PID/TID-indexed collection and add one centralized exit/reuse cleanup
   coordinator. Do not relocate subsystem internals in this chunk. Files:
   `monitor.py`, `rules.py`, `probalance.py`, tests. Detailed reference: Phase 6.

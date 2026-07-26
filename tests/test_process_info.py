@@ -6,7 +6,7 @@ import unittest
 from dataclasses import FrozenInstanceError
 
 from policy_models import AbsoluteNicePolicy, EffectiveProcessPolicy
-from process_info import ProcessPolicyView, ProcessSnapshot
+from process_info import ProcessPolicyView, ProcessSnapshot, ThreadSnapshot
 
 
 class ProcessSnapshotTests(unittest.TestCase):
@@ -51,3 +51,18 @@ class ProcessSnapshotTests(unittest.TestCase):
         self.assertTrue(view.manually_overridden)
         with self.assertRaises(FrozenInstanceError):
             view.manually_overridden = False
+
+    def test_thread_snapshot_is_immutable_and_normalizes_custom_providers(self):
+        thread = ThreadSnapshot.from_mapping({
+            "tid": 101,
+            "start_time_ticks": 99,
+            "name": "worker",
+            "cpu_percent": 12.5,
+            "nice": 5,
+            "affinity": "0-1",
+            "ionice": "2/4",
+        })
+
+        self.assertEqual((thread.tid, thread.start_time_ticks), (101, 99))
+        with self.assertRaises(FrozenInstanceError):
+            thread.tid = 102

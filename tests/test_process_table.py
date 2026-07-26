@@ -15,8 +15,13 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtTest import QSignalSpy
 
 from gui.dialogs import NicePriorityDialog
-from gui.process_table import ProcessTable, _CLOCK_TICKS, _parse_thread_cpu_stat
-from process_info import ProcessPolicyView, ProcessSnapshot
+from gui.process_table import (
+    ProcessTable,
+    ThreadSampler,
+    _CLOCK_TICKS,
+    _parse_thread_cpu_stat,
+)
+from process_info import ProcessPolicyView, ProcessSnapshot, ThreadSnapshot
 from rules import Rule, RuleEngine
 
 
@@ -43,6 +48,30 @@ class ProcessTableTests(unittest.TestCase):
 
         self.assertEqual(created, 99)
         self.assertEqual(cpu_seconds, 5 / _CLOCK_TICKS)
+
+    @mock.patch("gui.process_table._read_thread_cpu", return_value=(99, 2.0))
+    @mock.patch("gui.process_table.utils.get_process_tids", return_value=[101])
+    @mock.patch("gui.process_table.psutil.Process")
+    @mock.patch("builtins.open", new_callable=mock.mock_open, read_data="worker\n")
+    def test_thread_sampler_returns_typed_snapshot_with_start_identity(
+        self, _open, process, _get_tids, _read_cpu
+    ):
+        thread = process.return_value
+        thread.cpu_affinity.return_value = [0, 1]
+        thread.ionice.return_value = mock.Mock(ioclass=2, value=4)
+        thread.nice.return_value = 5
+
+        snapshots = ThreadSampler().read(100)
+
+        self.assertEqual(snapshots, [ThreadSnapshot(
+            tid=101,
+            start_time_ticks=99,
+            name="worker",
+            cpu_percent=None,
+            nice=5,
+            affinity="0-1",
+            ionice="2/4",
+        )])
 
     def test_sudo_column_is_hidden_by_default(self):
         table = ProcessTable(None, None)
@@ -141,11 +170,12 @@ class ProcessTableTests(unittest.TestCase):
                 )
 
     def test_always_rule_uses_exact_process_name(self):
-        table = ProcessTable(None, None)
+        engine = RuleEngine()
+        table = ProcessTable(engine, None)
         spy = QSignalSpy(table.rule_add_requested)
 
         table._emit_always_rule(
-            {"pid": 1234, "name": "blackdesert64.exe"},
+            self._view(engine, self._process(1234, "blackdesert64.exe", "user")),
             "CPU Priority",
             nice=-10,
         )
@@ -215,10 +245,13 @@ class ProcessTableTests(unittest.TestCase):
         dialog.get_mode.return_value = "offset"
         dialog.get_offset.return_value = -8
         messages = []
-        table = ProcessTable(None, messages.append)
+        engine = RuleEngine()
+        table = ProcessTable(engine, messages.append)
         changed = QSignalSpy(table.rule_value_manually_changed)
 
-        table._do_set_nice(self._process(42, "game.exe", "user") | {"nice": 5})
+        table._do_set_nice(self._view(
+            engine, self._process(42, "game.exe", "user") | {"nice": 5}
+        ))
 
         dialog_class.assert_called_once_with(
             5, table, "game.exe", initial_mode="absolute", initial_offset=0,
@@ -244,7 +277,9 @@ class ProcessTableTests(unittest.TestCase):
         )
         table = ProcessTable(engine, None)
 
-        table._do_set_nice(self._process(42, "game.exe", "user") | {"nice": -6})
+        table._do_set_nice(self._view(
+            engine, self._process(42, "game.exe", "user") | {"nice": -6}
+        ))
 
         dialog_class.assert_called_once_with(
             -6, table, "game.exe", initial_mode="offset", initial_offset=-5,
@@ -261,10 +296,13 @@ class ProcessTableTests(unittest.TestCase):
         dialog.get_mode.return_value = "offset"
         dialog.get_offset.return_value = -8
         messages = []
-        table = ProcessTable(None, messages.append)
+        engine = RuleEngine()
+        table = ProcessTable(engine, messages.append)
         changed = QSignalSpy(table.rule_value_manually_changed)
 
-        table._do_set_nice(self._process(42, "game.exe", "user") | {"nice": 5})
+        table._do_set_nice(self._view(
+            engine, self._process(42, "game.exe", "user") | {"nice": 5}
+        ))
 
         set_nice.assert_called_once_with(42, -3)
         self.assertEqual(len(changed), 0)
@@ -284,18 +322,9 @@ class ProcessTableTests(unittest.TestCase):
             ionice_class=3,
         ))
         table = ProcessTable(engine, None)
-        table.update_snapshot([{
-            "pid": 42,
-            "name": "game.exe",
-            "user": "user",
-            "sudo": False,
-            "cpu_percent": 1.0,
-            "mem_rss": 1024,
-            "nice": 0,
-            "affinity": "0-7",
-            "ionice": "2/4",
-            "cmdline": "game.exe",
-        }])
+        process = self._process(42, "game.exe", "user")
+        process.update(cpu_percent=1.0, affinity="0-7", ionice="2/4")
+        table.update_snapshot([self._view(engine, process)])
 
         self.assertEqual(table.item(0, table.NICE_CURRENT_COLUMN).text(), "0")
         self.assertEqual(table.item(0, table.NICE_ALWAYS_COLUMN).text(), "Absolute -10")
@@ -309,7 +338,9 @@ class ProcessTableTests(unittest.TestCase):
         rule = Rule(pattern="game.exe", match_type="exact", affinity="0-3", nice=-8)
         engine.add_rule(rule)
         table = ProcessTable(engine, None)
-        table.update_snapshot([self._process(42, "game.exe", "user")])
+        table.update_snapshot([
+            self._view(engine, self._process(42, "game.exe", "user"))
+        ])
 
         rule.affinity = "4-7"
         rule.nice = -5
@@ -352,12 +383,45 @@ class ProcessTableTests(unittest.TestCase):
             nice_mode="offset", nice_offset=-5, nice_floor=-15, nice_ceiling=19,
         ))
         table = ProcessTable(engine, None)
-        table.update_snapshot([self._process(42, "game.exe", "user")])
+        table.update_snapshot([
+            self._view(engine, self._process(42, "game.exe", "user"))
+        ])
 
         self.assertEqual(
             table.item(0, table.NICE_ALWAYS_COLUMN).text(),
             "Offset -5 [-15, 19]",
         )
+
+    def test_always_rendering_and_sorting_use_joined_policy_without_rule_lookup(self):
+        engine = RuleEngine()
+        engine.add_rule(Rule(
+            pattern="alpha", match_type="exact", affinity="4-7", nice=-5,
+            ionice_class=3,
+        ))
+        engine.add_rule(Rule(
+            pattern="beta", match_type="exact", affinity="0-1", nice=5,
+            ionice_class=2, ionice_level=7,
+        ))
+        views = [
+            self._view(engine, self._process(1, "alpha", "user")),
+            self._view(engine, self._process(2, "beta", "user")),
+        ]
+        table = ProcessTable(engine, None)
+        table.set_hide_root(False)
+
+        lookup_error = AssertionError("rendering queried the rule engine")
+        with mock.patch.object(
+            engine, "effective_settings", side_effect=lookup_error,
+        ), mock.patch.object(
+            engine, "effective_policy", side_effect=lookup_error,
+        ):
+            table.update_snapshot(views)
+            table._on_header_click(table.AFFINITY_ALWAYS_COLUMN)
+
+        self.assertEqual(table.item(0, 1).text(), "beta")
+        self.assertEqual(table.item(0, table.AFFINITY_ALWAYS_COLUMN).text(), "0-1")
+        self.assertEqual(table.item(0, table.NICE_ALWAYS_COLUMN).text(), "Absolute 5")
+        self.assertEqual(table.item(0, table.IONICE_ALWAYS_COLUMN).text(), "Low (2/7)")
 
     def test_root_processes_are_hidden_by_default_and_can_be_shown(self):
         table = ProcessTable(None, None)
@@ -387,14 +451,15 @@ class ProcessTableTests(unittest.TestCase):
         self.assertEqual(table.item(0, 2).text(), "bob")
 
     def test_process_row_expands_to_display_its_threads(self):
-        threads = [{
-            "tid": 101,
-            "name": "worker",
-            "cpu_percent": 12.3,
-            "nice": 5,
-            "affinity": "0-1",
-            "ionice": "2/4",
-        }]
+        threads = [ThreadSnapshot(
+            tid=101,
+            start_time_ticks=99,
+            name="worker",
+            cpu_percent=12.3,
+            nice=5,
+            affinity="0-1",
+            ionice="2/4",
+        )]
         table = ProcessTable(None, None, thread_provider=lambda pid: threads)
         table.set_hide_root(False)
         table.update_snapshot([self._process(100, "server", "user")])
@@ -480,6 +545,23 @@ class ProcessTableTests(unittest.TestCase):
             "cmdline": name,
         }
 
+    @staticmethod
+    def _view(engine: RuleEngine, process: dict) -> ProcessPolicyView:
+        observed = ProcessSnapshot(
+            pid=process["pid"], create_time=process.get("create_time", 1.0),
+            comm=process.get("comm", process["name"]), name=process["name"],
+            user=process.get("user", ""), sudo=process.get("sudo", False),
+            cpu_percent=process.get("cpu_percent", 0.0),
+            mem_rss=process.get("mem_rss", 0), nice=process.get("nice", 0),
+            affinity=process.get("affinity", ""),
+            ionice=process.get("ionice", ""),
+            cmdline=process.get("cmdline", ""),
+        )
+        return ProcessPolicyView(
+            observed=observed,
+            effective_policy=engine.effective_policy(observed.name),
+        )
+
     def test_always_rule_reuses_existing_rule_id(self):
         engine = RuleEngine()
         existing = Rule(
@@ -494,7 +576,7 @@ class ProcessTableTests(unittest.TestCase):
         spy = QSignalSpy(table.rule_add_requested)
 
         table._emit_always_rule(
-            {"pid": 42, "name": "game.exe"},
+            self._view(engine, self._process(42, "game.exe", "user")),
             "CPU Affinity",
             affinity="4-7",
         )
@@ -517,7 +599,10 @@ class ProcessTableTests(unittest.TestCase):
         table = ProcessTable(engine, None)
         spy = QSignalSpy(table.rule_remove_requested)
 
-        table._do_clear_rules({"pid": 42, "name": "game.exe"}, [matching.rule_id])
+        table._do_clear_rules(
+            self._view(engine, self._process(42, "game.exe", "user")),
+            [matching.rule_id],
+        )
 
         self.assertEqual(spy[0][0], [matching.rule_id])
         self.assertEqual(engine.get_rules(), [matching, unrelated])

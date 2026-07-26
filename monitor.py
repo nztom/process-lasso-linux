@@ -12,6 +12,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from rules import RuleEngine
 from probalance import ProBalance
 from process_info import ProcessInfo, ProcessPolicyView, ProcessSnapshot
+from runtime_cleanup import ProcessRuntimeCleanup
 import utils
 
 log = logging.getLogger(__name__)
@@ -205,6 +206,12 @@ class MonitorThread(QThread):
         self._gaming_mode_elevate_nice: bool = False
         self._gaming_niced: dict[int, int] = {}  # pid → original nice
 
+        self._runtime_cleanup = ProcessRuntimeCleanup(
+            rule_engine,
+            probalance,
+            self._forget_monitor_state,
+        )
+
         # Wire log callbacks
         rule_engine.set_log_callback(self._emit_log)
         probalance.set_log_callback(self._emit_log)
@@ -302,15 +309,17 @@ class MonitorThread(QThread):
         except (ProcessLookupError, PermissionError, OSError):
             pass
 
-    def _forget_process(self, pid: int):
-        """Clear all runtime state associated with one process identity."""
-        self._rule_engine.forget_pid(pid)
-        self._probalance.forget_pid(pid)
+    def _forget_monitor_state(self, pid: int):
+        """Clear Monitor-owned state for one ended process identity."""
         self._process_cache.pop(pid, None)
         self._original_affinities.pop(pid, None)
         self._gaming_niced.pop(pid, None)
         self._known_tids_by_pid.pop(pid, None)
         self._manually_overridden_pids.discard(pid)
+
+    def _forget_process(self, pid: int):
+        """Coordinate cleanup after process exit or detected PID reuse."""
+        self._runtime_cleanup.forget_pid(pid)
 
     def _observed_records(self) -> list[ProcessSnapshot]:
         """Detach immutable observations from the worker-owned cache."""

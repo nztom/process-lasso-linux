@@ -14,7 +14,18 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence
 
 import utils
-from process_info import ProcessInfo, ProcessPolicyView, ProcessSnapshot
+from process_info import (
+    ProcessInfo,
+    ProcessPolicyView,
+    ProcessSnapshot,
+    ThreadSnapshot,
+)
+from policy_models import (
+    EffectiveProcessPolicy,
+    IoPriorityPolicy,
+    OffsetNicePolicy,
+    format_nice_policy,
+)
 from gui.dialogs import AffinityDialog, NicePriorityDialog, IoNiceDialog, RuleEditDialog
 from gui.table_layout import configure_columns, reset_columns
 
@@ -46,7 +57,7 @@ class ThreadSampler:
         # (pid, tid) -> (thread create time, CPU seconds, wall time, last percent)
         self._samples: dict[tuple[int, int], tuple[float, float, float, float | None]] = {}
 
-    def read(self, pid: int) -> list[dict]:
+    def read(self, pid: int) -> list[ThreadSnapshot]:
         threads = []
         now = time.monotonic()
         live_keys = set()
@@ -69,14 +80,15 @@ class ThreadSampler:
                     else:
                         cpu_percent = previous[3]
                 self._samples[key] = (created, cpu_total, now, cpu_percent)
-                threads.append({
-                    "tid": tid,
-                    "name": name or str(tid),
-                    "cpu_percent": cpu_percent,
-                    "nice": thread.nice(),
-                    "affinity": affinity,
-                    "ionice": f"{ionice.ioclass}/{ionice.value}",
-                })
+                threads.append(ThreadSnapshot(
+                    tid=tid,
+                    start_time_ticks=created,
+                    name=name or str(tid),
+                    cpu_percent=cpu_percent,
+                    nice=thread.nice(),
+                    affinity=affinity,
+                    ionice=f"{ionice.ioclass}/{ionice.value}",
+                ))
             except (OSError, psutil.Error):
                 continue
         self._samples = {
@@ -138,7 +150,7 @@ class ProcessTable(QTableWidget):
         super().__init__(0, len(self.COLUMNS), parent)
         self._rule_engine = rule_engine
         self._log_callback = log_callback
-        self._snapshot: list[ProcessPolicyView | ProcessSnapshot | ProcessInfo] = []
+        self._snapshot: list[ProcessPolicyView] = []
         self._throttled_pids: set[int] = set()
         self._sort_col = 4   # CPU%
         self._sort_asc = False
@@ -234,14 +246,28 @@ class ProcessTable(QTableWidget):
     def update_snapshot(
         self, snapshot: list[ProcessPolicyView | ProcessSnapshot | ProcessInfo]
     ):
-        self._snapshot = snapshot
-        live_pids = {proc["pid"] for proc in snapshot}
+        views = []
+        for proc in snapshot:
+            if isinstance(proc, ProcessPolicyView):
+                views.append(proc)
+                continue
+            observed = (
+                proc if isinstance(proc, ProcessSnapshot)
+                else ProcessSnapshot.from_mapping(proc)
+            )
+            policy = (
+                self._rule_engine.effective_policy(observed.name)
+                if self._rule_engine is not None else EffectiveProcessPolicy()
+            )
+            views.append(ProcessPolicyView(observed, policy))
+        self._snapshot = views
+        live_pids = {proc.observed.pid for proc in views}
         if self._thread_sampler is not None:
             for pid in self._expanded_pids - live_pids:
                 self._thread_sampler.reset(pid)
         self._expanded_pids.intersection_update(live_pids)
         users = sorted(
-            {proc.get("user", "") for proc in snapshot if proc.get("user", "")},
+            {proc.observed.user for proc in views if proc.observed.user},
             key=str.casefold,
         )
         if users != self._available_users:
@@ -260,7 +286,6 @@ class ProcessTable(QTableWidget):
                     ),
                     manually_overridden=proc.manually_overridden,
                 )
-                if isinstance(proc, ProcessPolicyView) else proc
                 for proc in self._snapshot
             ]
         self._refresh_display()
@@ -280,10 +305,12 @@ class ProcessTable(QTableWidget):
         self._refresh_display()
 
     def _refresh_display(self):
-        def always_settings(proc: dict) -> dict:
-            if self._rule_engine is None:
-                return {}
-            return self._rule_engine.effective_settings(proc["name"])
+        def effective_policy(
+            proc: ProcessPolicyView | ProcessSnapshot | ProcessInfo,
+        ) -> EffectiveProcessPolicy:
+            if isinstance(proc, ProcessPolicyView):
+                return proc.effective_policy
+            return EffectiveProcessPolicy()
 
         key_map = {
             0: lambda p: p["pid"],
@@ -293,11 +320,11 @@ class ProcessTable(QTableWidget):
             4: lambda p: p["cpu_percent"],
             5: lambda p: p["mem_rss"],
             6: lambda p: p["nice"],
-            7: lambda p: self._format_priority_rule(always_settings(p)),
+            7: lambda p: self._format_priority_policy(effective_policy(p)),
             8: lambda p: p["affinity"],
-            9: lambda p: always_settings(p).get("affinity") or "",
+            9: lambda p: effective_policy(p).affinity or "",
             10: lambda p: p["ionice"],
-            11: lambda p: self._format_ionice_rule(always_settings(p)),
+            11: lambda p: self._format_ionice_policy(effective_policy(p).ionice),
             12: lambda p: "",
             13: lambda p: p.get("cmdline", "").lower(),
         }
@@ -328,7 +355,11 @@ class ProcessTable(QTableWidget):
             ]
 
         threads_by_pid = {
-            proc["pid"]: self._thread_provider(proc["pid"])
+            proc["pid"]: [
+                thread if isinstance(thread, ThreadSnapshot)
+                else ThreadSnapshot.from_mapping(thread)
+                for thread in self._thread_provider(proc["pid"])
+            ]
             for proc in sorted_snap
             if proc["pid"] in self._expanded_pids
         }
@@ -340,7 +371,7 @@ class ProcessTable(QTableWidget):
             pid = proc["pid"]
             cpu = proc["cpu_percent"]
             throttled = pid in self._throttled_pids
-            persistent = always_settings(proc)
+            policy = effective_policy(proc)
             items = [
                 str(pid),
                 proc["name"],
@@ -349,11 +380,11 @@ class ProcessTable(QTableWidget):
                 f"{cpu:.1f}",
                 f"{proc['mem_rss'] / 1_048_576:.1f}",
                 str(proc["nice"]),
-                self._format_priority_rule(persistent),
+                self._format_priority_policy(policy),
                 proc.get("affinity", ""),
-                persistent.get("affinity") or "",
+                policy.affinity or "",
                 proc.get("ionice", ""),
-                self._format_ionice_rule(persistent),
+                self._format_ionice_policy(policy.ionice),
                 "⏸ Throttled" if throttled else "",
                 proc.get("cmdline", ""),
             ]
@@ -398,31 +429,26 @@ class ProcessTable(QTableWidget):
                 row += 1
 
     @staticmethod
-    def _format_priority_rule(settings: dict) -> str:
-        """Render the effective policy without exposing Offset's nice marker."""
-        if settings.get("nice_mode") == "offset":
-            return (
-                f"Offset {settings.get('nice_offset', 0):+d} "
-                f"[{settings.get('nice_floor', -15)}, "
-                f"{settings.get('nice_ceiling', 19)}]"
-            )
-        nice = settings.get("nice")
-        return f"Absolute {nice}" if nice is not None else ""
+    def _format_priority_policy(policy: EffectiveProcessPolicy) -> str:
+        """Render the typed effective CPU-priority policy."""
+        return format_nice_policy(policy.nice) if policy.nice is not None else ""
 
-    def _render_thread_row(self, row: int, proc: ProcessInfo, thread: dict):
+    def _render_thread_row(
+        self, row: int, proc: ProcessPolicyView, thread: ThreadSnapshot
+    ):
         """Render a display-only child row beneath its owning process."""
         items = [
-            str(thread["tid"]),
-            f"    ↳ {thread['name']}",
+            str(thread.tid),
+            f"    ↳ {thread.name}",
             proc.get("user", ""),
             "",
-            "" if thread.get("cpu_percent") is None else f"{thread['cpu_percent']:.1f}",
+            "" if thread.cpu_percent is None else f"{thread.cpu_percent:.1f}",
             "",
-            str(thread.get("nice", "")),
+            str(thread.nice),
             "",
-            thread.get("affinity", ""),
+            thread.affinity,
             "",
-            thread.get("ionice", ""),
+            thread.ionice,
             "",
             "Thread",
             f"Thread of {proc['name']} ({proc['pid']})",
@@ -466,11 +492,11 @@ class ProcessTable(QTableWidget):
         return f"{label} ({value})" if label else str(value)
 
     @staticmethod
-    def _format_ionice_rule(settings: dict) -> str:
-        io_class = settings.get("ionice_class")
-        level = settings.get("ionice_level")
-        if io_class is None:
+    def _format_ionice_policy(policy: IoPriorityPolicy | None) -> str:
+        if policy is None:
             return ""
+        io_class = policy.io_class
+        level = policy.level
         labels = {
             (2, 0): "High",
             (2, 4): "Normal",
@@ -482,39 +508,33 @@ class ProcessTable(QTableWidget):
         raw = str(io_class) if level is None else f"{io_class}/{level}"
         return f"{label} ({raw})"
 
-    def _selected_proc(self) -> dict | None:
+    def _selected_proc(self) -> ProcessPolicyView | None:
         rows = self.selectedItems()
         if not rows:
             return None
         row = self.currentRow()
         pid_item = self.item(row, 0)
-        name_item = self.item(row, 1)
-        nice_item = self.item(row, self.NICE_CURRENT_COLUMN)
-        affinity_item = self.item(row, self.AFFINITY_CURRENT_COLUMN)
-        ionice_item = self.item(row, self.IONICE_CURRENT_COLUMN)
         if not pid_item or pid_item.data(Qt.ItemDataRole.UserRole) != "process":
             return None
-        return {
-            "pid": int(pid_item.text()),
-            "name": name_item.text() if name_item else "",
-            "nice": int(nice_item.text()) if nice_item else 0,
-            "affinity": affinity_item.text() if affinity_item else "",
-            "ionice": ionice_item.text() if ionice_item else "",
-        }
+        pid = int(pid_item.text())
+        return next(
+            (proc for proc in self._snapshot if proc.observed.pid == pid), None
+        )
 
-    def _selected_procs(self) -> list[dict]:
-        """Return all selected rows as proc dicts."""
+    def _selected_procs(self) -> list[ProcessPolicyView]:
+        """Return typed views for all selected process rows."""
         selected_rows = sorted({idx.row() for idx in self.selectedIndexes()})
         procs = []
         for row in selected_rows:
             pid_item = self.item(row, 0)
-            name_item = self.item(row, 1)
             if not pid_item or pid_item.data(Qt.ItemDataRole.UserRole) != "process":
                 continue
-            procs.append({
-                "pid": int(pid_item.text()),
-                "name": name_item.text() if name_item else "",
-            })
+            pid = int(pid_item.text())
+            proc = next(
+                (item for item in self._snapshot if item.observed.pid == pid), None
+            )
+            if proc is not None:
+                procs.append(proc)
         return procs
 
     def keyPressEvent(self, event):
@@ -543,11 +563,11 @@ class ProcessTable(QTableWidget):
             menu.addSeparator()
         else:
             menu.addAction(
-                f"Kill {proc['name']} ({proc['pid']})",
+                f"Kill {proc.observed.name} ({proc.observed.pid})",
                 lambda: self._do_kill(proc, force=False)
             )
             menu.addAction(
-                f"Force Kill {proc['name']} ({proc['pid']})",
+                f"Force Kill {proc.observed.name} ({proc.observed.pid})",
                 lambda: self._do_kill(proc, force=True)
             )
             menu.addSeparator()
@@ -564,11 +584,11 @@ class ProcessTable(QTableWidget):
         io_menu.addAction("Always…", lambda: self._do_add_ionice_rule(proc))
         menu.addSeparator()
         menu.addAction(
-            f"Add Rule for '{proc['name']}'...",
+            f"Add Rule for '{proc.observed.name}'...",
             lambda: self._do_add_rule(proc)
         )
         clear_menu = menu.addMenu("Clear Rules")
-        matching_rules = self._matching_rules(proc["name"])
+        matching_rules = self._matching_rules(proc.observed.name)
         clear_menu.setEnabled(bool(matching_rules))
         for rule in matching_rules:
             clear_menu.addAction(
@@ -595,9 +615,10 @@ class ProcessTable(QTableWidget):
             if rule.pattern_matches(proc_name)
         ]
 
-    def _do_clear_rules(self, proc: dict, rule_ids: list[str]):
+    def _do_clear_rules(self, proc: ProcessPolicyView, rule_ids: list[str]):
+        observed = proc.observed
         rules = [
-            rule for rule in self._matching_rules(proc["name"])
+            rule for rule in self._matching_rules(observed.name)
             if rule.rule_id in rule_ids
         ]
         if not rules:
@@ -606,29 +627,31 @@ class ProcessTable(QTableWidget):
         answer = QMessageBox.question(
             self,
             "Clear Process Rules",
-            f"Remove {len(rules)} matching rule(s) for {proc['name']}?\n\n{names}\n\n"
+            f"Remove {len(rules)} matching rule(s) for {observed.name}?\n\n{names}\n\n"
             "The running process will not be reset or modified.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if answer == QMessageBox.StandardButton.Yes:
             self.rule_remove_requested.emit([rule.rule_id for rule in rules])
 
-    def _do_kill(self, proc: dict, force: bool):
+    def _do_kill(self, proc: ProcessPolicyView, force: bool):
         import signal
         sig = signal.SIGKILL if force else signal.SIGTERM
         try:
             import os
-            os.kill(proc["pid"], sig)
-            msg = f"{'Force k' if force else 'K'}illed {proc['name']} ({proc['pid']})"
+            os.kill(proc.observed.pid, sig)
+            msg = f"{'Force k' if force else 'K'}illed {proc.observed.name} ({proc.observed.pid})"
         except OSError as e:
-            msg = f"Kill failed for {proc['name']} ({proc['pid']}): {e}"
+            msg = f"Kill failed for {proc.observed.name} ({proc.observed.pid}): {e}"
         if self._log_callback:
             self._log_callback(msg)
 
-    def _do_kill_many(self, procs: list[dict], force: bool):
+    def _do_kill_many(self, procs: list[ProcessPolicyView], force: bool):
         if not procs:
             return
-        names = ", ".join(f"{p['name']}({p['pid']})" for p in procs[:4])
+        names = ", ".join(
+            f"{p.observed.name}({p.observed.pid})" for p in procs[:4]
+        )
         if len(procs) > 4:
             names += f" and {len(procs) - 4} more"
         ans = QMessageBox.question(
@@ -641,28 +664,26 @@ class ProcessTable(QTableWidget):
         for p in procs:
             self._do_kill(p, force)
 
-    def _do_set_affinity(self, proc: dict):
-        dlg = AffinityDialog(proc.get("affinity", ""), self, proc["name"])
+    def _do_set_affinity(self, proc: ProcessPolicyView):
+        observed = proc.observed
+        dlg = AffinityDialog(observed.affinity, self, observed.name)
         if dlg.exec() == AffinityDialog.DialogCode.Accepted:
             cpulist = dlg.get_cpulist()
-            if utils.set_affinity(proc["pid"], cpulist):
-                msg = f"Set affinity={cpulist} on {proc['name']}({proc['pid']})"
-                self.rule_value_manually_changed.emit(proc["pid"])
+            if utils.set_affinity(observed.pid, cpulist):
+                msg = f"Set affinity={cpulist} on {observed.name}({observed.pid})"
+                self.rule_value_manually_changed.emit(observed.pid)
             else:
-                msg = f"Failed to set affinity on {proc['name']}({proc['pid']})"
+                msg = f"Failed to set affinity on {observed.name}({observed.pid})"
             if self._log_callback:
                 self._log_callback(msg)
 
-    def _do_set_nice(self, proc: dict):
-        priority = (
-            self._rule_engine.effective_settings(proc["name"])
-            if self._rule_engine is not None
-            else {}
-        )
+    def _do_set_nice(self, proc: ProcessPolicyView):
+        observed = proc.observed
+        priority = proc.effective_policy.nice
         dlg = NicePriorityDialog(
-            proc.get("nice", 0), self, proc["name"],
-            initial_mode=priority.get("nice_mode", "absolute"),
-            initial_offset=priority.get("nice_offset", 0),
+            observed.nice, self, observed.name,
+            initial_mode="offset" if isinstance(priority, OffsetNicePolicy) else "absolute",
+            initial_offset=priority.offset if isinstance(priority, OffsetNicePolicy) else 0,
         )
         if dlg.exec() == NicePriorityDialog.DialogCode.Accepted:
             nice = dlg.get_nice()
@@ -671,25 +692,26 @@ class ProcessTable(QTableWidget):
                 if dlg.get_mode() == "offset"
                 else f"nice={nice}"
             )
-            if utils.set_nice(proc["pid"], nice):
-                msg = f"Set {change} on {proc['name']}({proc['pid']})"
-                self.rule_value_manually_changed.emit(proc["pid"])
+            if utils.set_nice(observed.pid, nice):
+                msg = f"Set {change} on {observed.name}({observed.pid})"
+                self.rule_value_manually_changed.emit(observed.pid)
             else:
-                msg = f"Failed to set {change} on {proc['name']}({proc['pid']}) (root needed?)"
+                msg = f"Failed to set {change} on {observed.name}({observed.pid}) (root needed?)"
             if self._log_callback:
                 self._log_callback(msg)
 
-    def _do_set_ionice(self, proc: dict):
-        current_class, current_level = self._parse_ionice(proc.get("ionice", ""))
-        dlg = IoNiceDialog(current_class, current_level, self, proc["name"])
+    def _do_set_ionice(self, proc: ProcessPolicyView):
+        observed = proc.observed
+        current_class, current_level = self._parse_ionice(observed.ionice)
+        dlg = IoNiceDialog(current_class, current_level, self, observed.name)
         if dlg.exec() == IoNiceDialog.DialogCode.Accepted:
             cls = dlg.get_ionice_class()
             lvl = dlg.get_ionice_level()
-            if utils.set_ionice(proc["pid"], cls, lvl):
-                msg = f"Set ionice class={cls} level={lvl} on {proc['name']}({proc['pid']})"
-                self.rule_value_manually_changed.emit(proc["pid"])
+            if utils.set_ionice(observed.pid, cls, lvl):
+                msg = f"Set ionice class={cls} level={lvl} on {observed.name}({observed.pid})"
+                self.rule_value_manually_changed.emit(observed.pid)
             else:
-                msg = f"Failed to set ionice on {proc['name']}({proc['pid']})"
+                msg = f"Failed to set ionice on {observed.name}({observed.pid})"
             if self._log_callback:
                 self._log_callback(msg)
 
@@ -702,25 +724,28 @@ class ProcessTable(QTableWidget):
         except (AttributeError, ValueError):
             return 2, 4
 
-    def _emit_always_rule(self, proc: dict, label: str, **settings):
+    def _emit_always_rule(
+        self, proc: ProcessPolicyView, label: str, **settings
+    ):
         """Create a Windows-style ``Always`` rule for an exact process name."""
         from rules import Rule
 
-        rule_name = f"{proc['name']} — {label}"
+        observed = proc.observed
+        rule_name = f"{observed.name} — {label}"
         existing = None
         if self._rule_engine is not None:
             existing = next(
                 (
                     rule for rule in self._rule_engine.get_rules()
                     if rule.name == rule_name
-                    and rule.pattern == proc["name"]
+                    and rule.pattern == observed.name
                     and rule.match_type == "exact"
                 ),
                 None,
             )
         rule = Rule(
             name=rule_name,
-            pattern=proc["name"],
+            pattern=observed.name,
             match_type="exact",
             enabled=existing.enabled if existing else True,
             force_apply=existing.force_apply if existing else False,
@@ -730,33 +755,36 @@ class ProcessTable(QTableWidget):
             rule.rule_id = existing.rule_id
         self.rule_add_requested.emit(rule)
 
-    def _do_add_affinity_rule(self, proc: dict):
-        dlg = AffinityDialog(proc.get("affinity", ""), self, proc["name"])
+    def _do_add_affinity_rule(self, proc: ProcessPolicyView):
+        observed = proc.observed
+        dlg = AffinityDialog(observed.affinity, self, observed.name)
         if dlg.exec() == AffinityDialog.DialogCode.Accepted:
             self._emit_always_rule(
                 proc, "CPU Affinity", affinity=dlg.get_cpulist()
             )
 
-    def _do_add_priority_rule(self, proc: dict):
+    def _do_add_priority_rule(self, proc: ProcessPolicyView):
         from rules import Rule
+        observed = proc.observed
         existing = None
         if self._rule_engine is not None:
             existing = next((
                 rule for rule in reversed(self._rule_engine.get_rules())
-                if rule.pattern == proc["name"] and rule.match_type == "exact"
+                if rule.pattern == observed.name and rule.match_type == "exact"
                 and rule.nice is not None
             ), None)
         template = existing or Rule(
-            name=f"{proc['name']} — CPU Priority", pattern=proc["name"],
-            match_type="exact", nice=proc.get("nice", 0),
+            name=f"{observed.name} — CPU Priority", pattern=observed.name,
+            match_type="exact", nice=observed.nice,
         )
         dlg = RuleEditDialog(rule=template, parent=self)
         if dlg.exec() == RuleEditDialog.DialogCode.Accepted:
             self.rule_add_requested.emit(dlg.get_rule())
 
-    def _do_add_ionice_rule(self, proc: dict):
-        current_class, current_level = self._parse_ionice(proc.get("ionice", ""))
-        dlg = IoNiceDialog(current_class, current_level, self, proc["name"])
+    def _do_add_ionice_rule(self, proc: ProcessPolicyView):
+        observed = proc.observed
+        current_class, current_level = self._parse_ionice(observed.ionice)
+        dlg = IoNiceDialog(current_class, current_level, self, observed.name)
         if dlg.exec() == IoNiceDialog.DialogCode.Accepted:
             self._emit_always_rule(
                 proc,
@@ -765,10 +793,11 @@ class ProcessTable(QTableWidget):
                 ionice_level=dlg.get_ionice_level(),
             )
 
-    def _do_add_rule(self, proc: dict):
+    def _do_add_rule(self, proc: ProcessPolicyView):
         from rules import Rule
         # Pre-populate with process name
-        template = Rule(name=proc["name"], pattern=proc["name"], match_type="contains")
+        name = proc.observed.name
+        template = Rule(name=name, pattern=name, match_type="contains")
         dlg = RuleEditDialog(rule=template, parent=self)
         if dlg.exec() == RuleEditDialog.DialogCode.Accepted:
             rule = dlg.get_rule()
