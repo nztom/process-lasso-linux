@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout,
@@ -12,6 +13,7 @@ from PyQt6.QtCore import pyqtSignal, Qt
 import subprocess
 
 import utils
+import app_identity
 from gui.dialogs import AffinityDialog
 
 
@@ -217,12 +219,15 @@ class SettingsTab(QWidget):
             os.makedirs(service_dir, exist_ok=True)
             # Find the main.py location
             main_py = os.path.join(os.path.dirname(os.path.dirname(__file__)), "main.py")
+            launch_command = "exec -a {} /usr/bin/python3 {}".format(
+                shlex.quote(app_identity.PROCESS_NAME), shlex.quote(main_py)
+            )
             unit = (
                 "[Unit]\n"
                 "Description=Process Lasso Linux\n"
                 "After=graphical-session.target\n\n"
                 "[Service]\n"
-                f"ExecStart=/usr/bin/python3 {main_py}\n"
+                f"ExecStart=/usr/bin/bash -c {shlex.quote(launch_command)}\n"
                 "Restart=on-failure\n\n"
                 "[Install]\n"
                 "WantedBy=graphical-session.target\n"

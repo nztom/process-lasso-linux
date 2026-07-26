@@ -640,14 +640,28 @@ class ProcessTable(QTableWidget):
                 self._log_callback(msg)
 
     def _do_set_nice(self, proc: dict):
-        dlg = NicePriorityDialog(proc.get("nice", 0), self, proc["name"])
+        priority = (
+            self._rule_engine.effective_settings(proc["name"])
+            if self._rule_engine is not None
+            else {}
+        )
+        dlg = NicePriorityDialog(
+            proc.get("nice", 0), self, proc["name"],
+            initial_mode=priority.get("nice_mode", "absolute"),
+            initial_offset=priority.get("nice_offset", 0),
+        )
         if dlg.exec() == NicePriorityDialog.DialogCode.Accepted:
             nice = dlg.get_nice()
+            change = (
+                f"nice offset={dlg.get_offset():+d} (target={nice})"
+                if dlg.get_mode() == "offset"
+                else f"nice={nice}"
+            )
             if utils.set_nice(proc["pid"], nice):
-                msg = f"Set nice={nice} on {proc['name']}({proc['pid']})"
+                msg = f"Set {change} on {proc['name']}({proc['pid']})"
                 self.rule_value_manually_changed.emit(proc["pid"])
             else:
-                msg = f"Failed to set nice={nice} on {proc['name']}({proc['pid']}) (root needed?)"
+                msg = f"Failed to set {change} on {proc['name']}({proc['pid']}) (root needed?)"
             if self._log_callback:
                 self._log_callback(msg)
 

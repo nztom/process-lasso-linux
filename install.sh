@@ -62,6 +62,8 @@ python3 -c "import psutil" 2>/dev/null || error "python-psutil missing. Install:
 python3 -c "import PyQt6"  2>/dev/null || error "python-pyqt6 missing.  Install: $(pkg_hint python-pyqt6  pyqt6 PyQt6  python3-pyqt6 PyQt6)"
 info "Dependencies OK."
 
+PROCESS_NAME="$(PYTHONPATH="$SCRIPT_DIR" python3 -c 'import app_identity; print(app_identity.PROCESS_NAME)')"
+
 # ── Copy app files ─────────────────────────────────────────────────────────
 if [[ "$SCRIPT_DIR" != "$INSTALL_DIR" ]]; then
     info "Installing app to $INSTALL_DIR ..."
@@ -76,7 +78,7 @@ fi
 # ── Launcher ───────────────────────────────────────────────────────────────
 info "Installing launcher to $LAUNCHER ..."
 LAUNCHER_CONTENT="#!/bin/bash
-exec python3 $INSTALL_DIR/main.py \"\$@\"
+exec -a $PROCESS_NAME python3 $INSTALL_DIR/main.py \"\$@\"
 "
 if command -v sudo &>/dev/null; then
     echo "$LAUNCHER_CONTENT" | sudo tee "$LAUNCHER" > /dev/null

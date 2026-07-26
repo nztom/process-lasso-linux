@@ -14,6 +14,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtTest import QSignalSpy
 
+from gui.dialogs import NicePriorityDialog
 from gui.process_table import ProcessTable, _CLOCK_TICKS, _parse_thread_cpu_stat
 from rules import Rule, RuleEngine
 
@@ -162,6 +163,114 @@ class ProcessTableTests(unittest.TestCase):
 
     def test_non_preset_always_priority_omits_custom_label(self):
         self.assertEqual(ProcessTable._format_nice(-8), "-8")
+
+    def test_current_priority_dialog_supports_nice_offsets(self):
+        dialog = NicePriorityDialog(current_nice=5)
+        dialog._mode.setCurrentIndex(dialog._mode.findData("offset"))
+        dialog._spin.setValue(-8)
+
+        self.assertEqual(dialog._mode.currentText(), "Offset")
+        self.assertEqual(dialog.get_mode(), "offset")
+        self.assertEqual(dialog.get_offset(), -8)
+        self.assertEqual(dialog.get_nice(), -3)
+        self.assertEqual(dialog._target.text(), "→ nice -3")
+
+    def test_current_priority_dialog_shows_applied_offset_without_compounding(self):
+        dialog = NicePriorityDialog(
+            current_nice=-6, initial_mode="offset", initial_offset=-5,
+        )
+
+        self.assertEqual(dialog.get_mode(), "offset")
+        self.assertEqual(dialog.get_offset(), -5)
+        self.assertEqual(dialog.get_nice(), -6)
+        self.assertEqual(dialog._target.text(), "→ nice -6")
+
+        dialog._spin.setValue(-4)
+        self.assertEqual(dialog.get_nice(), -5)
+
+    def test_current_priority_offset_is_clamped_to_linux_nice_range(self):
+        dialog = NicePriorityDialog(current_nice=18)
+        dialog._mode.setCurrentIndex(dialog._mode.findData("offset"))
+        dialog._spin.setValue(10)
+
+        self.assertEqual(dialog.get_nice(), 19)
+
+    def test_current_priority_negative_offset_is_clamped_to_linux_nice_range(self):
+        dialog = NicePriorityDialog(current_nice=-18)
+        dialog._mode.setCurrentIndex(dialog._mode.findData("offset"))
+        dialog._spin.setValue(-10)
+
+        self.assertEqual(dialog.get_nice(), -20)
+        self.assertEqual(dialog._target.text(), "→ nice -20")
+
+    @mock.patch("gui.process_table.utils.set_nice", return_value=True)
+    @mock.patch("gui.process_table.NicePriorityDialog")
+    def test_current_priority_action_applies_offset_target(
+        self, dialog_class, set_nice
+    ):
+        dialog = dialog_class.return_value
+        dialog.exec.return_value = dialog_class.DialogCode.Accepted
+        dialog.get_nice.return_value = -3
+        dialog.get_mode.return_value = "offset"
+        dialog.get_offset.return_value = -8
+        messages = []
+        table = ProcessTable(None, messages.append)
+        changed = QSignalSpy(table.rule_value_manually_changed)
+
+        table._do_set_nice(self._process(42, "game.exe", "user") | {"nice": 5})
+
+        dialog_class.assert_called_once_with(
+            5, table, "game.exe", initial_mode="absolute", initial_offset=0,
+        )
+        set_nice.assert_called_once_with(42, -3)
+        self.assertEqual(list(changed[0]), [42])
+        self.assertEqual(
+            messages,
+            ["Set nice offset=-8 (target=-3) on game.exe(42)"],
+        )
+
+    @mock.patch("gui.process_table.NicePriorityDialog")
+    def test_current_priority_action_initializes_from_effective_offset_rule(
+        self, dialog_class
+    ):
+        engine = RuleEngine()
+        engine.add_rule(Rule(
+            pattern="game.exe", match_type="exact", nice=-6,
+            nice_mode="offset", nice_offset=-5,
+        ))
+        dialog_class.return_value.exec.return_value = (
+            dialog_class.DialogCode.Rejected
+        )
+        table = ProcessTable(engine, None)
+
+        table._do_set_nice(self._process(42, "game.exe", "user") | {"nice": -6})
+
+        dialog_class.assert_called_once_with(
+            -6, table, "game.exe", initial_mode="offset", initial_offset=-5,
+        )
+
+    @mock.patch("gui.process_table.utils.set_nice", return_value=False)
+    @mock.patch("gui.process_table.NicePriorityDialog")
+    def test_failed_current_priority_offset_does_not_emit_manual_change(
+        self, dialog_class, set_nice
+    ):
+        dialog = dialog_class.return_value
+        dialog.exec.return_value = dialog_class.DialogCode.Accepted
+        dialog.get_nice.return_value = -3
+        dialog.get_mode.return_value = "offset"
+        dialog.get_offset.return_value = -8
+        messages = []
+        table = ProcessTable(None, messages.append)
+        changed = QSignalSpy(table.rule_value_manually_changed)
+
+        table._do_set_nice(self._process(42, "game.exe", "user") | {"nice": 5})
+
+        set_nice.assert_called_once_with(42, -3)
+        self.assertEqual(len(changed), 0)
+        self.assertEqual(
+            messages,
+            ["Failed to set nice offset=-8 (target=-3) on game.exe(42) (root needed?)"],
+        )
 
     def test_process_table_shows_current_and_always_rule_values(self):
         engine = RuleEngine()

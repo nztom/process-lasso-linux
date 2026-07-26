@@ -108,6 +108,9 @@ bash install.sh
 
 The installer detects your package manager and prints the correct install command for any missing dependency.
 
+The process is named `process-lasso` by default. To customize it, change
+`PROCESS_NAME` in `app_identity.py` and run the installer again.
+
 ## Distro compatibility
 
 | Distro | Package manager | psutil | PyQt6 |

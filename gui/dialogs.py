@@ -232,14 +232,20 @@ class AffinityDialog(QDialog):
 
 
 class NicePriorityDialog(QDialog):
-    """Nice priority picker (-20 to 19)."""
+    """Absolute or relative nice priority picker (-20 to 19)."""
 
-    def __init__(self, current_nice: int = 0, parent=None, title_suffix: str = ""):
+    def __init__(
+        self, current_nice: int = 0, parent=None, title_suffix: str = "",
+        initial_mode: str = "absolute", initial_offset: int = 0,
+    ):
         super().__init__(parent)
         self.setWindowTitle(f"Set CPU Priority (nice){' — ' + title_suffix if title_suffix else ''}")
+        self._initial_mode = initial_mode if initial_mode == "offset" else "absolute"
+        self._initial_offset = max(-39, min(39, initial_offset))
         self._build_ui(current_nice)
 
     def _build_ui(self, current_nice: int):
+        self._current_nice = max(-20, min(19, current_nice))
         layout = QVBoxLayout(self)
 
         info = QLabel(
@@ -250,13 +256,25 @@ class NicePriorityDialog(QDialog):
         layout.addWidget(info)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("Nice value:"))
+        row.addWidget(QLabel("Mode:"))
+        self._mode = QComboBox()
+        self._mode.addItem("Absolute", "absolute")
+        self._mode.addItem("Offset", "offset")
+        row.addWidget(self._mode)
+        row.addWidget(QLabel("Value:"))
         self._spin = QSpinBox()
         self._spin.setRange(-20, 19)
-        self._spin.setValue(current_nice)
+        self._spin.setValue(self._current_nice)
         row.addWidget(self._spin)
+        self._target = QLabel()
+        row.addWidget(self._target)
         row.addStretch()
         layout.addLayout(row)
+
+        self._mode.currentIndexChanged.connect(self._update_mode)
+        self._spin.valueChanged.connect(self._update_target)
+        self._mode.setCurrentIndex(self._mode.findData(self._initial_mode))
+        self._update_mode(reset_value=True)
 
         # Windows Process Lasso calls these CPU Priority Classes. Linux has a
         # continuous nice range, so these are the closest useful equivalents.
@@ -271,7 +289,7 @@ class NicePriorityDialog(QDialog):
             ("Idle (19)", 19),
         ]:
             btn = QPushButton(label)
-            btn.clicked.connect(lambda checked, v=val: self._spin.setValue(v))
+            btn.clicked.connect(lambda checked, v=val: self._set_absolute(v))
             presets_row.addWidget(btn)
         presets_row.addStretch()
         layout.addLayout(presets_row)
@@ -284,7 +302,45 @@ class NicePriorityDialog(QDialog):
         layout.addWidget(buttons)
 
     def get_nice(self) -> int:
+        if self._mode.currentData() == "offset":
+            # If an offset rule produced the live value, adjust relative to that
+            # policy so accepting its unchanged offset does not apply it twice.
+            baseline_offset = (
+                self._initial_offset if self._initial_mode == "offset" else 0
+            )
+            adjustment = self._spin.value() - baseline_offset
+            return max(-20, min(19, self._current_nice + adjustment))
         return self._spin.value()
+
+    def get_mode(self) -> str:
+        return self._mode.currentData()
+
+    def get_offset(self) -> int:
+        return self._spin.value() if self.get_mode() == "offset" else 0
+
+    def _set_absolute(self, value: int):
+        self._mode.setCurrentIndex(self._mode.findData("absolute"))
+        self._spin.setValue(value)
+
+    def _update_mode(self, _index=None, *, reset_value: bool = True):
+        offset = self._mode.currentData() == "offset"
+        if offset:
+            self._spin.setRange(-39, 39)
+        else:
+            self._spin.setRange(-20, 19)
+        if reset_value:
+            self._spin.setValue(
+                self._initial_offset
+                if offset and self._initial_mode == "offset"
+                else 0 if offset else self._current_nice
+            )
+        self._update_target()
+
+    def _update_target(self):
+        if self._mode.currentData() == "offset":
+            self._target.setText(f"→ nice {self.get_nice()}")
+        else:
+            self._target.clear()
 
 
 class IoNiceDialog(QDialog):
