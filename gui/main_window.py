@@ -323,10 +323,9 @@ class MainWindow(QMainWindow):
     @pyqtSlot(bool, bool)
     def _on_gaming_mode_changed(self, active: bool, elevate_nice: bool):
         self._monitor.set_gaming_mode(active, elevate_nice)
-        if active:
-            # Push the default/rule affinities onto all currently running
-            # processes so they immediately use the now-online preferred CPUs.
-            self._monitor.reapply_all_defaults()
+        # Parking clips masks to online CPUs; unparking does not expand them
+        # automatically. Reapply after either topology change.
+        self._monitor.reapply_all_defaults()
 
     @pyqtSlot(dict)
     def _on_settings_changed(self, updated_config: dict):

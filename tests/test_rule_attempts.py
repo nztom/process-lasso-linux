@@ -207,6 +207,34 @@ class RuleAttemptTests(unittest.TestCase):
 
         set_affinity.assert_not_called()
 
+    @mock.patch("rules.utils.get_online_cpus", return_value={0, 1})
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_parked_rule_cpus_do_not_count_as_affinity_drift(
+        self, set_affinity, _online
+    ):
+        self.rule.affinity = "0-3"
+        with mock.patch("rules.os.sched_getaffinity", return_value={0, 1}):
+            for _ in range(RULE_APPLY_ATTEMPTS + 5):
+                self.engine.apply_to_process(100, "game.exe")
+
+        set_affinity.assert_not_called()
+        self.assertEqual(self.engine._affinity_drift_attempts, {})
+        self.assertEqual(self.engine._affinity_released, set())
+
+    @mock.patch("rules.utils.get_online_cpus", return_value={0, 1})
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_rule_with_only_parked_cpus_waits_without_drift_attempts(
+        self, set_affinity, _online
+    ):
+        self.rule.affinity = "2-3"
+
+        for _ in range(RULE_APPLY_ATTEMPTS + 5):
+            self.engine.apply_to_process(100, "game.exe")
+
+        set_affinity.assert_not_called()
+        self.assertEqual(self.engine._affinity_drift_attempts, {})
+        self.assertEqual(self.engine._affinity_released, set())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -302,7 +302,12 @@ class RuleEngine:
             and (rule.rule_id, pid) in self._suppressed_rule_pids
         ):
             return []
-        desired = utils.cpulist_to_set(rule.affinity)
+        desired = utils.cpulist_to_online_set(rule.affinity)
+        if not desired:
+            # A rule containing only parked CPUs is temporarily inapplicable,
+            # not drifting. It will be retried after those CPUs return.
+            return []
+        effective_affinity = utils._cpuset_to_cpulist(desired)
         actions = []
         for tid in tids if tids is not None else utils.get_process_tids(pid):
             try:
@@ -327,7 +332,7 @@ class RuleEngine:
                 continue
             if not first_seen:
                 self._affinity_drift_attempts[identity] = attempts + 1
-            if not utils.set_thread_affinity(tid, rule.affinity):
+            if not utils.set_thread_affinity(tid, effective_affinity):
                 continue
             kind = "initial affinity" if first_seen else "affinity drift"
             attempt = "" if first_seen or rule.force_apply else (

@@ -46,11 +46,30 @@ class SetNiceTests(unittest.TestCase):
             timeout=5,
         )
 
+    @mock.patch("utils.get_online_cpus", return_value={0, 1, 2, 3})
     @mock.patch("utils.os.sched_setaffinity")
-    def test_thread_affinity_targets_only_requested_tid(self, set_affinity):
+    def test_thread_affinity_targets_only_requested_tid(
+        self, set_affinity, _online
+    ):
         self.assertTrue(utils.set_thread_affinity(1235, "0-3"))
 
         set_affinity.assert_called_once_with(1235, {0, 1, 2, 3})
+
+    @mock.patch("utils.get_online_cpus", return_value={0, 1})
+    @mock.patch("utils.os.sched_setaffinity")
+    def test_thread_affinity_excludes_parked_cpus(self, set_affinity, _online):
+        self.assertTrue(utils.set_thread_affinity(1235, "0-3"))
+
+        set_affinity.assert_called_once_with(1235, {0, 1})
+
+    @mock.patch("utils.get_online_cpus", return_value={0, 1})
+    @mock.patch("utils.os.sched_setaffinity")
+    def test_thread_affinity_fails_when_every_requested_cpu_is_parked(
+        self, set_affinity, _online
+    ):
+        self.assertFalse(utils.set_thread_affinity(1235, "2-3"))
+
+        set_affinity.assert_not_called()
 
     @mock.patch("nice_helper.set_negative_nice_thread", return_value=True)
     def test_negative_thread_nice_uses_single_thread_helper(self, helper):

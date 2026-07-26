@@ -34,6 +34,11 @@ def cpulist_to_set(cpulist: str) -> set[int]:
     return result
 
 
+def cpulist_to_online_set(cpulist: str) -> set[int]:
+    """Parse an affinity and restrict it to CPUs currently online."""
+    return cpulist_to_set(cpulist) & get_online_cpus()
+
+
 def set_affinity(pid: int, cpulist: str) -> bool:
     """Apply CPU affinity to a process AND all its threads via sched_setaffinity(2).
 
@@ -42,9 +47,13 @@ def set_affinity(pid: int, cpulist: str) -> bool:
 
     Returns True if at least one thread was set successfully."""
     try:
-        cpuset = cpulist_to_set(cpulist)
+        cpuset = cpulist_to_online_set(cpulist)
     except ValueError as e:
         log.warning("set_affinity: bad cpulist %r: %s", cpulist, e)
+        return False
+
+    if not cpuset:
+        log.debug("set_affinity: no requested CPUs are currently online")
         return False
 
     tids = get_process_tids(pid)
@@ -64,7 +73,10 @@ def set_affinity(pid: int, cpulist: str) -> bool:
 def set_thread_affinity(tid: int, cpulist: str) -> bool:
     """Apply CPU affinity to one newly observed thread."""
     try:
-        os.sched_setaffinity(tid, cpulist_to_set(cpulist))
+        cpuset = cpulist_to_online_set(cpulist)
+        if not cpuset:
+            return False
+        os.sched_setaffinity(tid, cpuset)
         return True
     except (ValueError, PermissionError, ProcessLookupError, OSError) as exc:
         log.debug("sched_setaffinity tid=%d: %s", tid, exc)
