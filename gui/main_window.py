@@ -143,7 +143,6 @@ class MainWindow(QMainWindow):
 
         # Tab 4: Gaming Mode
         self._gaming_tab = GamingModeTab(self._config)
-        self._gaming_tab.reset_requested.connect(self._on_reset_requested)
         self._gaming_tab.log_message.connect(self._append_log)
         self._gaming_tab.gaming_mode_changed.connect(self._on_gaming_mode_changed)
         self._gaming_tab.config_changed.connect(self._on_gaming_config_changed)
@@ -152,6 +151,9 @@ class MainWindow(QMainWindow):
         # Tab 5: Settings
         self._settings_tab = SettingsTab(self._config)
         self._settings_tab.settings_changed.connect(self._on_settings_changed)
+        self._settings_tab.helper_changed.connect(self._gaming_tab.refresh_helper_state)
+        self._settings_tab.reset_requested.connect(self._on_reset_requested)
+        self._gaming_tab.helper_changed.connect(self._settings_tab.refresh_helper_state)
         self._tabs.addTab(self._settings_tab, "Settings")
 
         # Tab 6: Log
@@ -318,6 +320,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot()
     def _on_reset_requested(self):
+        self._gaming_tab.reset_all_changes()
         self._monitor.reset_all_affinities()
 
     @pyqtSlot(bool, bool)

@@ -176,7 +176,7 @@ echo
 echo "Quick start for asymmetric CPUs (AMD X3D / Intel Hybrid):"
 echo "  Gaming Mode tab → click 'Enable Gaming Mode'"
 echo "  This parks non-preferred CPUs before launching your game"
-echo "  (exactly what gamemoderun does)"
+echo "  (a Process Lasso for Linux feature; not Feral GameMode/gamemoderun)"
 echo
 echo "Optional — background process isolation:"
 echo "  Settings tab → Default CPU Affinity: non-preferred cpulist"

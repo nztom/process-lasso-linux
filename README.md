@@ -18,9 +18,35 @@ A KDE/Linux process manager inspired by Windows Process Lasso. Built with Python
 
 ---
 
-## Why it beats Windows Process Lasso on X3D / Hybrid CPUs
+## Preferred-core Gaming Mode
 
-Process Lasso for Linux uses `sysfs` CPU parking (`/sys/devices/system/cpu/cpuN/online`). Writing `0` physically removes non-preferred CPUs from the kernel scheduler **before your game ever launches**. Every process — including the game, its thread pools, and the OS itself — sees only the preferred cores from the start. Thread-pool sizing is correct, there is no competition for runqueues, and frametime variance drops measurably. This is the same technique used by `gamemoderun` on AMD X3D and Intel Hybrid platforms.
+Process Lasso for Linux can use the CPU hotplug interface at
+`/sys/devices/system/cpu/cpuN/online` to take non-preferred CPUs offline before
+a game launches. Because this is a system-wide operation, every process sees
+only the remaining online CPUs until Gaming Mode is disabled.
+
+On dual-CCD AMD X3D processors, this concentrates work on the V-Cache CCD. On
+Intel hybrid processors, it can concentrate work on P-cores. Results depend on
+the game, workload, kernel, firmware, and hardware; fewer online CPUs can also
+reduce performance in workloads that benefit from all available cores.
+
+### Naming and platform distinction
+
+This project's **Gaming Mode** is an independent Linux feature:
+
+- It is not Windows Game Mode, which is an operating-system resource and
+  scheduling facility. On dual-CCD AMD X3D systems, Windows game detection,
+  the Windows scheduler, and AMD chipset drivers cooperate on core selection
+  and parking.
+- It is not Process Lasso for Windows **Performance Mode** (formerly called
+  Gaming Mode), which primarily coordinates a performance power plan and
+  ProBalance behavior.
+- It is not Feral Interactive's GameMode or `gamemoderun`. Feral GameMode is a
+  separate Linux daemon with configurable performance optimizations. It does
+  not universally perform this project's system-wide CPU offlining behavior.
+
+The features share a goal—giving games favorable resources—but their
+implementations and scope are different.
 
 ---
 
@@ -57,6 +83,7 @@ Process Lasso for Linux uses `sysfs` CPU parking (`/sys/devices/system/cpu/cpuN/
 ### Gaming Mode tab
 - **One-click CPU parking** for AMD X3D and Intel Hybrid (P-core/E-core) CPUs
 - Auto-detects topology: AMD X3D parks non-V-Cache CCD; Intel Hybrid parks E-cores
+- Uses Linux CPU hotplug globally; parked CPUs are unavailable to every process until restored
 - Granular **preferred CCD core selector** — uncheck individual CPUs or use "No SMT" to run on physical cores only
 - Elevate game priority (nice −1) for all matched processes
 
@@ -80,6 +107,8 @@ Process Lasso for Linux uses `sysfs` CPU parking (`/sys/devices/system/cpu/cpuN/
 - Toggle between custom dark theme and system Breeze Dark theme
 - Start minimized to tray on launch
 - Systemd user service autostart toggle (no root required)
+- Privileged helper status and install/update action (also available in Gaming Mode)
+- Reset all Process Lasso changes and restore parked CPUs
 
 ### System tray
 - Minimize to tray on window close
@@ -94,7 +123,7 @@ Process Lasso for Linux uses `sysfs` CPU parking (`/sys/devices/system/cpu/cpuN/
 - `psutil >= 5.9`
 - `PyQt6 >= 6.4`
 - Linux kernel ≥ 4.1 (sysfs CPU hotplug)
-- `sudo` with a NOPASSWD rule for the sysfs helper (set up via the Gaming Mode tab)
+- `sudo` with a NOPASSWD rule for the sysfs helper (set up via Gaming Mode or Settings)
 
 ---
 

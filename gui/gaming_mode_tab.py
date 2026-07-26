@@ -40,10 +40,10 @@ class _ParkWorker(QThread):
 
 
 class GamingModeTab(QWidget):
-    reset_requested    = pyqtSignal()           # → MonitorThread.reset_all_affinities()
     log_message        = pyqtSignal(str)
     gaming_mode_changed = pyqtSignal(bool, bool)  # active, elevate_nice → MonitorThread.set_gaming_mode()
     config_changed     = pyqtSignal(dict)       # emitted when gaming profiles are saved/deleted
+    helper_changed     = pyqtSignal()
 
     def __init__(self, config: dict = None, parent=None):
         super().__init__(parent)
@@ -88,8 +88,8 @@ class GamingModeTab(QWidget):
 
         desc = QLabel(
             "Parks (takes offline) non-preferred CPUs so the game initialises its\n"
-            "thread pool against the correct CPU count — no frametime jitter.\n\n"
-            "This mirrors exactly what gamemoderun does:\n"
+            "thread pool using only the selected CPU set. This is a global,\n"
+            "Linux-specific action, not Windows Game Mode or Feral GameMode.\n\n"
             "  AMD X3D  → parks non-V-Cache CCD (smaller L3)\n"
             "  Intel Hybrid → parks E-cores (lower max freq)\n"
             "  Uniform CPU → parking disabled (no asymmetry)"
@@ -148,7 +148,7 @@ class GamingModeTab(QWidget):
         self._nice_cb.setChecked(True)
         self._nice_cb.setToolTip(
             "When Gaming Mode is active, apply nice -1 to all processes that match\n"
-            "your configured rules. Mirrors gamemoded's priority elevation.\n"
+            "your configured rules to raise their Linux scheduler priority.\n"
             "Requires the privileged helper (nice < 0 needs root)."
         )
         park_layout.addWidget(self._nice_cb)
@@ -167,23 +167,6 @@ class GamingModeTab(QWidget):
         self._cpu_status_label.setWordWrap(True)
         park_layout.addWidget(self._cpu_status_label)
         layout.addWidget(park_group)
-
-        # ── Reset All Changes ──────────────────────────────────────────────
-        reset_group = QGroupBox("Reset All Changes")
-        reset_layout = QVBoxLayout(reset_group)
-        reset_desc = QLabel(
-            "Restores all per-process CPU affinities that Process Lasso has changed\n"
-            "back to their original state, and unparks any parked CPUs.\n"
-            "Use this to cleanly undo everything without restarting."
-        )
-        reset_desc.setWordWrap(True)
-        reset_layout.addWidget(reset_desc)
-
-        reset_btn = QPushButton("↩  Reset All Changes")
-        reset_btn.setMinimumHeight(36)
-        reset_btn.clicked.connect(self._reset_all)
-        reset_layout.addWidget(reset_btn)
-        layout.addWidget(reset_group)
 
         # ── Game Launcher (with integrated profiles) ───────────────────────
         launcher_group = QGroupBox("Game Launcher")
@@ -344,17 +327,6 @@ class GamingModeTab(QWidget):
             # Tell MonitorThread Gaming Mode is active
             self.gaming_mode_changed.emit(True, self._nice_cb.isChecked())
 
-    def _update_helper_status(self):
-        if cpu_park.is_helper_current() and cpu_park.is_sudoers_installed():
-            self._helper_status.setText("✓ Helper installed — parking + nice -1 available")
-            self._helper_status.setStyleSheet("color: #a6e3a1;")
-        elif cpu_park.is_helper_installed() and cpu_park.is_sudoers_installed():
-            self._helper_status.setText("⚠ Helper needs update — click 'Install / Update Helper'")
-            self._helper_status.setStyleSheet("color: #f9e2af;")
-        else:
-            self._helper_status.setText("✗ Helper not installed — click 'Install / Update Helper' to enable parking")
-            self._helper_status.setStyleSheet("color: #f38ba8;")
-
     def _update_cpu_status(self):
         online  = cpu_park.get_online_cpus()
         offline = cpu_park.get_offline_cpus()
@@ -367,6 +339,17 @@ class GamingModeTab(QWidget):
             self._cpu_status_label.setText(f"All CPUs online: {sorted(online)}")
             self._cpu_status_label.setStyleSheet("")
 
+    def _update_helper_status(self):
+        if cpu_park.is_helper_current() and cpu_park.is_sudoers_installed():
+            self._helper_status.setText("✓ Helper installed — parking + nice -1 available")
+            self._helper_status.setStyleSheet("color: #a6e3a1;")
+        elif cpu_park.is_helper_installed() and cpu_park.is_sudoers_installed():
+            self._helper_status.setText("⚠ Helper needs update — click 'Install / Update Helper'")
+            self._helper_status.setStyleSheet("color: #f9e2af;")
+        else:
+            self._helper_status.setText("✗ Helper not installed — click 'Install / Update Helper' to enable parking")
+            self._helper_status.setStyleSheet("color: #f38ba8;")
+
     def _select_preferred(self, mode: str):
         """Quick-select helper for the preferred CCD checkboxes."""
         for cpu, cb in self._preferred_cbs.items():
@@ -376,6 +359,12 @@ class GamingModeTab(QWidget):
                 cb.setChecked(False)
             elif mode == "no_smt":
                 cb.setChecked(cpu not in self._smt_siblings)
+
+    def refresh_helper_state(self):
+        """Refresh controls that depend on the helper managed in Settings."""
+        self._update_helper_status()
+        if self._topo and self._topo.has_asymmetry and not self._worker:
+            self._park_btn.setEnabled(cpu_park.is_helper_installed())
 
     def _install_helper(self):
         password, ok = QInputDialog.getText(
@@ -388,9 +377,9 @@ class GamingModeTab(QWidget):
         self._append_log("Installing privileged helper…")
         ok, msg = cpu_park.install_helper_as_root(password=password)
         self._append_log(msg)
-        self._update_helper_status()
-        if ok and self._topo and self._topo.has_asymmetry:
-            self._park_btn.setEnabled(True)
+        self.refresh_helper_state()
+        if ok:
+            self.helper_changed.emit()
         QMessageBox.information(self, "Install Helper", msg)
 
     def _toggle_gaming_mode(self):
@@ -454,18 +443,8 @@ class GamingModeTab(QWidget):
             self._pending_enable_after_unpark = False
             self._enable_gaming_mode()
 
-    def _reset_all(self):
-        ans = QMessageBox.question(
-            self, "Reset All Changes",
-            "This will:\n"
-            "  • Restore all per-process CPU affinities to their original state\n"
-            "  • Unpark any parked CPUs\n\n"
-            "Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if ans != QMessageBox.StandardButton.Yes:
-            return
-
+    def reset_all_changes(self):
+        """Clear Gaming Mode state and unpark CPUs as part of a global reset."""
         # Notify MonitorThread to restore nice values before anything else
         if self._parked:
             self.gaming_mode_changed.emit(False, False)
@@ -480,9 +459,6 @@ class GamingModeTab(QWidget):
             self._update_cpu_status()
             # Refresh topology grid now that all CPUs are back online
             self._detect_topology()
-
-        # Restore per-process affinities via monitor
-        self.reset_requested.emit()
 
     # ── Profiles ──────────────────────────────────────────────────────────
     # A profile stores the complete game launch configuration:

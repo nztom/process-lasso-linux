@@ -7,18 +7,21 @@ import shlex
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout,
     QLabel, QLineEdit, QPushButton, QCheckBox, QSpinBox, QMessageBox,
-    QSlider,
+    QSlider, QFrame, QInputDialog,
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 import subprocess
 
 import utils
 import app_identity
+import cpu_park
 from gui.dialogs import AffinityDialog
 
 
 class SettingsTab(QWidget):
     settings_changed = pyqtSignal(dict)   # emits full updated config dict
+    helper_changed = pyqtSignal()
+    reset_requested = pyqtSignal()
 
     def __init__(self, config: dict, parent=None):
         super().__init__(parent)
@@ -136,9 +139,89 @@ class SettingsTab(QWidget):
         auto_layout.addWidget(autostart_apply_btn)
         layout.addWidget(auto_group)
 
+        # ── Privileged helper ──────────────────────────────────────────────
+        helper_group = QGroupBox("Root Helper")
+        helper_layout = QVBoxLayout(helper_group)
+        helper_desc = QLabel(
+            "Installs the privileged helper used for CPU parking and negative nice values."
+        )
+        helper_desc.setWordWrap(True)
+        helper_layout.addWidget(helper_desc)
+
+        helper_frame = QFrame()
+        helper_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        helper_row = QHBoxLayout(helper_frame)
+        self._helper_status = QLabel()
+        helper_row.addWidget(self._helper_status)
+        install_btn = QPushButton("Install / Update Helper (root)")
+        install_btn.clicked.connect(self._install_helper)
+        helper_row.addWidget(install_btn)
+        helper_row.addStretch()
+        helper_layout.addWidget(helper_frame)
+        layout.addWidget(helper_group)
+
+        # ── Reset All Changes ──────────────────────────────────────────────
+        reset_group = QGroupBox("Reset All Changes")
+        reset_layout = QVBoxLayout(reset_group)
+        reset_desc = QLabel(
+            "Restores all per-process CPU affinities and priority changes made by "
+            "Process Lasso, then unparks any parked CPUs."
+        )
+        reset_desc.setWordWrap(True)
+        reset_layout.addWidget(reset_desc)
+        reset_btn = QPushButton("↩  Reset All Changes")
+        reset_btn.setMinimumHeight(36)
+        reset_btn.clicked.connect(self._reset_all)
+        reset_layout.addWidget(reset_btn)
+        layout.addWidget(reset_group)
+
         layout.addStretch()
 
         self._load_config()
+        self._update_helper_status()
+
+    def _update_helper_status(self):
+        if cpu_park.is_helper_current() and cpu_park.is_sudoers_installed():
+            self._helper_status.setText("✓ Helper installed — parking + nice -1 available")
+            self._helper_status.setStyleSheet("color: #a6e3a1;")
+        elif cpu_park.is_helper_installed() and cpu_park.is_sudoers_installed():
+            self._helper_status.setText("⚠ Helper needs update — click 'Install / Update Helper'")
+            self._helper_status.setStyleSheet("color: #f9e2af;")
+        else:
+            self._helper_status.setText(
+                "✗ Helper not installed — install it to enable CPU parking and nice -1"
+            )
+            self._helper_status.setStyleSheet("color: #f38ba8;")
+
+    def refresh_helper_state(self):
+        """Refresh the helper status after it changes on another tab."""
+        self._update_helper_status()
+
+    def _install_helper(self):
+        password, ok = QInputDialog.getText(
+            self, "Root Authentication",
+            "Enter root password to install the privileged sysfs helper:",
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok or not password:
+            return
+        ok, msg = cpu_park.install_helper_as_root(password=password)
+        self._update_helper_status()
+        if ok:
+            self.helper_changed.emit()
+        QMessageBox.information(self, "Install Helper", msg)
+
+    def _reset_all(self):
+        ans = QMessageBox.question(
+            self, "Reset All Changes",
+            "This will:\n"
+            "  • Restore all per-process CPU affinities and priority changes\n"
+            "  • Disable Gaming Mode and unpark any parked CPUs\n\n"
+            "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if ans == QMessageBox.StandardButton.Yes:
+            self.reset_requested.emit()
 
     def _load_config(self):
         default = self._config.get("cpu", {}).get("default_affinity") or ""

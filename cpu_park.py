@@ -1,11 +1,15 @@
-"""CPU core parking: offline non-preferred CPUs (mirrors gamemoderun).
+"""CPU core isolation by offlining non-preferred CPUs through Linux sysfs.
 
 Works on:
   AMD X3D (Ryzen 7950X3D etc.)  — detects preferred CCD by L3 cache size
   Intel hybrid (12th gen+)      — detects P-cores vs E-cores by max freq
   Uniform / other CPUs          — gracefully reports no asymmetry found
 
-Why park instead of sched_setaffinity:
+This is an independent, Linux-specific implementation. It is not Process
+Lasso's former Windows "Gaming Mode" (now Performance Mode), Windows Game
+Mode, or Feral GameMode/gamemoderun.
+
+Why offline CPUs instead of using sched_setaffinity:
   Parking writes 0 to /sys/devices/system/cpu/cpuN/online. The kernel
   physically removes those CPUs from the scheduler. Every process
   (including the game) sees fewer CPUs from birth, so thread-pool sizing
