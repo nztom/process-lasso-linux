@@ -9,6 +9,12 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import utils
+from policy_models import (
+    AbsoluteNicePolicy,
+    EffectiveProcessPolicy,
+    IoPriorityPolicy,
+    OffsetNicePolicy,
+)
 from thread_priority_state import ThreadPriorityState, thread_identity
 
 log = logging.getLogger(__name__)
@@ -181,34 +187,59 @@ class RuleEngine:
         """Return True when at least one enabled rule matches a process name."""
         return any(rule.matches(proc_name) for rule in self._rules)
 
-    def effective_settings(self, proc_name: str) -> dict:
-        """Return the final persistent settings produced by matching rules.
+    def effective_policy(self, proc_name: str) -> EffectiveProcessPolicy:
+        """Return the typed final policy produced by matching enabled rules.
 
         Rules are applied in list order, so a later matching rule with the same
-        setting wins.  This mirrors ``apply_to_process`` and is used by the
-        process table's Always columns.
+        setting wins. This is the authoritative effective-policy merge.
         """
-        settings = {
-            "affinity": None,
-            "nice": None,
-            "ionice_class": None,
-            "ionice_level": None,
-        }
+        affinity = None
+        nice = None
+        ionice = None
         for rule in self._rules:
             if not rule.matches(proc_name):
                 continue
             if rule.affinity is not None:
-                settings["affinity"] = rule.affinity
+                affinity = rule.affinity
             if rule.nice is not None:
-                settings["nice"] = rule.nice
                 if rule.nice_mode == "offset":
-                    settings["nice_mode"] = rule.nice_mode
-                    settings["nice_offset"] = rule.nice_offset
-                    settings["nice_floor"] = rule.nice_floor
-                    settings["nice_ceiling"] = rule.nice_ceiling
+                    nice = OffsetNicePolicy(
+                        offset=rule.nice_offset,
+                        floor=rule.nice_floor,
+                        ceiling=rule.nice_ceiling,
+                    )
+                else:
+                    nice = AbsoluteNicePolicy(rule.nice)
             if rule.ionice_class is not None:
-                settings["ionice_class"] = rule.ionice_class
-                settings["ionice_level"] = rule.ionice_level
+                ionice = IoPriorityPolicy(rule.ionice_class, rule.ionice_level)
+        return EffectiveProcessPolicy(
+            affinity=affinity,
+            nice=nice,
+            ionice=ionice,
+        )
+
+    def effective_settings(self, proc_name: str) -> dict:
+        """Return the legacy dictionary view of :meth:`effective_policy`."""
+        policy = self.effective_policy(proc_name)
+        settings = {
+            "affinity": policy.affinity,
+            "nice": policy.nice.value if isinstance(
+                policy.nice, AbsoluteNicePolicy
+            ) else 0 if isinstance(policy.nice, OffsetNicePolicy) else None,
+            "ionice_class": (
+                policy.ionice.io_class if policy.ionice is not None else None
+            ),
+            "ionice_level": (
+                policy.ionice.level if policy.ionice is not None else None
+            ),
+        }
+        if isinstance(policy.nice, OffsetNicePolicy):
+            settings.update({
+                "nice_mode": "offset",
+                "nice_offset": policy.nice.offset,
+                "nice_floor": policy.nice.floor,
+                "nice_ceiling": policy.nice.ceiling,
+            })
         return settings
 
     def forget_pid(self, pid: int):

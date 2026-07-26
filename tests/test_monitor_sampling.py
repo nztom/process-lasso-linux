@@ -13,7 +13,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from monitor import MonitorThread, _safe_proc_identity, _update_proc_metrics
 from probalance import ProBalance
-from rules import RuleEngine
+from rules import Rule, RuleEngine
 
 
 class MonitorSamplingTests(unittest.TestCase):
@@ -36,8 +36,48 @@ class MonitorSamplingTests(unittest.TestCase):
 
         snapshot = monitor._snapshot_records()
         monitor._process_cache[7]["cpu_percent"] = 99.0
+        snapshot[0]["pid"] = 8
+        snapshot.append({"pid": 9})
 
         self.assertEqual(snapshot[0]["cpu_percent"], 1.0)
+        self.assertEqual(monitor._process_cache, {
+            7: {"pid": 7, "cpu_percent": 99.0}
+        })
+
+    def test_process_exit_clears_all_transient_state(self):
+        engine = RuleEngine()
+        rule = Rule(rule_id="policy", pattern="game", affinity="0-3")
+        engine.add_rule(rule)
+        engine.suppress_pid(7)
+        engine._affinity_seen.add("boot:7:1:7:2:policy")
+        engine._affinity_drift_attempts["boot:7:1:7:2:policy"] = 3
+        engine._affinity_released.add("boot:7:1:7:2:policy")
+        probalance = ProBalance({})
+        probalance._states[7] = mock.Mock()
+        monitor = MonitorThread(engine, probalance, {})
+        monitor._known_pids = {7}
+        monitor._process_cache = {
+            7: {"pid": 7, "comm": "game", "create_time": 1.0}
+        }
+        monitor._original_affinities[7] = frozenset({0})
+        monitor._gaming_niced[7] = 0
+        monitor._known_tids_by_pid[7] = {7, 8}
+        monitor._manually_overridden_pids.add(7)
+
+        monitor._sync_processes([])
+
+        self.assertEqual(monitor._known_pids, set())
+        self.assertNotIn(7, monitor._process_cache)
+        self.assertNotIn(7, monitor._original_affinities)
+        self.assertNotIn(7, monitor._gaming_niced)
+        self.assertNotIn(7, monitor._known_tids_by_pid)
+        self.assertNotIn(7, monitor._manually_overridden_pids)
+        self.assertNotIn(7, probalance._states)
+        self.assertNotIn(7, engine._attempts_by_rule[rule.rule_id])
+        self.assertNotIn((rule.rule_id, 7), engine._suppressed_rule_pids)
+        self.assertFalse(engine._affinity_seen)
+        self.assertFalse(engine._affinity_drift_attempts)
+        self.assertFalse(engine._affinity_released)
 
     @mock.patch("monitor.utils.get_process_tids", return_value=[100])
     def test_startup_process_rule_does_not_replace_persisted_nice_baseline(
@@ -60,6 +100,12 @@ class MonitorSamplingTests(unittest.TestCase):
     @mock.patch("monitor._safe_proc_identity")
     def test_pid_reuse_clears_all_old_process_state(self, safe_identity):
         engine = RuleEngine()
+        rule = Rule(rule_id="policy", pattern="game", affinity="0-3")
+        engine.add_rule(rule)
+        engine.suppress_pid(7)
+        engine._affinity_seen.add("boot:7:1:7:2:policy")
+        engine._affinity_drift_attempts["boot:7:1:7:2:policy"] = 3
+        engine._affinity_released.add("boot:7:1:7:2:policy")
         probalance = ProBalance({})
         monitor = MonitorThread(engine, probalance, {})
         monitor._known_pids = {7}
@@ -89,6 +135,11 @@ class MonitorSamplingTests(unittest.TestCase):
         self.assertNotIn(7, monitor._known_tids_by_pid)
         self.assertNotIn(7, monitor._manually_overridden_pids)
         self.assertNotIn(7, probalance._states)
+        self.assertNotIn(7, engine._attempts_by_rule[rule.rule_id])
+        self.assertNotIn((rule.rule_id, 7), engine._suppressed_rule_pids)
+        self.assertFalse(engine._affinity_seen)
+        self.assertFalse(engine._affinity_drift_attempts)
+        self.assertFalse(engine._affinity_released)
         apply_new.assert_called_once_with(replacement)
 
     @mock.patch("monitor.utils.get_process_tids", return_value=[100, 101, 102])

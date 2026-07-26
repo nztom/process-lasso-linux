@@ -88,21 +88,21 @@ unchecked chunk, read the referenced detailed task below, implement it, run the
 standard verification, and stop. Do not combine chunks merely because they are
 in the same phase.
 
-- [ ] **Chunk 1 — Rule merge characterization tests.** Add tests for per-field
+- [x] **Chunk 1 — Rule merge characterization tests.** Add tests for per-field
   last-wins precedence and disabled rules. Files: `rules.py`,
   `tests/test_thread_priority_state.py` or a focused new rule-model test file.
   Detailed reference: Phase 1. No production behavior changes.
-- [ ] **Chunk 2 — Suppression characterization tests.** Cover manual suppression
+- [x] **Chunk 2 — Suppression characterization tests.** Cover manual suppression
   for absolute nice, offset nice, affinity, I/O, new threads, and forced rules.
   Files: `rules.py`, `monitor.py`, relevant tests. Detailed reference: Phase 1.
-- [ ] **Chunk 3 — Identity and snapshot characterization tests.** Cover process
+- [x] **Chunk 3 — Identity and snapshot characterization tests.** Cover process
   exit, PID reuse, transient-state cleanup, and detached worker snapshots.
   Files: `monitor.py`, `rules.py`, `probalance.py`, relevant tests. Detailed
   reference: Phase 1.
-- [ ] **Chunk 4 — Typed nice-policy values.** Add immutable absolute and offset
+- [x] **Chunk 4 — Typed nice-policy values.** Add immutable absolute and offset
   policy types with validation and formatting tests. Do not migrate consumers.
   Prefer a small new model module. Detailed reference: Phase 2.
-- [ ] **Chunk 5 — Typed effective policy merge.** Add
+- [x] **Chunk 5 — Typed effective policy merge.** Add
   `EffectiveProcessPolicy`, implement the authoritative merge in `RuleEngine`,
   and retain the old dictionary API as a compatibility adapter. Files:
   `rules.py`, the new model module, tests. Detailed reference: Phase 2.
