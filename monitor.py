@@ -186,11 +186,14 @@ class MonitorThread(QThread):
     cpu_snapshot_ready     = pyqtSignal(list)    # emitted with list of per-CPU % floats
     log_message = pyqtSignal(str)                # log lines for UI
 
-    def __init__(self, rule_engine: RuleEngine, probalance: ProBalance, config: dict):
+    def __init__(self, rule_engine: RuleEngine, probalance: ProBalance, config: dict,
+                 game_sessions=None):
         super().__init__()
         self._rule_engine = rule_engine
         self._probalance = probalance
         self._config = config
+        self._game_sessions = game_sessions
+        self._game_memberships = {}
         self._stop = False
         self._known_pids: set[int] = set()
         self._known_tids_by_pid: dict[int, set[int]] = {}
@@ -236,6 +239,8 @@ class MonitorThread(QThread):
                 if self._rule_engine.matches_process(name):
                     self._rule_engine.apply_to_process(pid, name)
                 elif default:
+                    if (self._game_sessions and self._game_sessions.session_for_pid(pid)):
+                        continue
                     if utils.set_affinity(pid, default):
                         self._emit_log(f"[Default] affinity={default} → {name}({pid})")
             except OSError:
@@ -311,6 +316,8 @@ class MonitorThread(QThread):
                 observed=observed,
                 effective_policy=self._rule_engine.effective_policy(observed.name),
                 manually_overridden=observed.pid in self._manually_overridden_pids,
+                game_id=(self._game_memberships.get((observed.pid, observed.create_time)) or {}).get("game_id"),
+                game_name=(self._game_memberships.get((observed.pid, observed.create_time)) or {}).get("game_name"),
             ))
         return views
 
@@ -320,14 +327,26 @@ class MonitorThread(QThread):
         name = info["name"]
         self._known_tids_by_pid.setdefault(pid, set(utils.get_process_tids(pid)))
         self._capture_original(pid)
+        game_session = (self._game_sessions.session_for_pid(
+            pid, float(info.get("create_time", 0.0))) if self._game_sessions else None)
+        if game_session and not self._game_sessions.launch_has_started(game_session, pid, name):
+            return
         matched = self._rule_engine.matches_process(name)
         if matched:
             self._rule_engine.apply_to_process(pid, name)
-        else:
+        elif not game_session:
             default = self._default_affinity()
             if default:
                 if utils.set_affinity(pid, default):
                     self._emit_log(f"[Default] affinity={default} → {name}({pid})")
+
+    def _rules_ready(self, info) -> bool:
+        if not self._game_sessions:
+            return True
+        session = self._game_sessions.session_for_pid(
+            int(info["pid"]), float(info.get("create_time", 0.0)))
+        return not session or self._game_sessions.launch_has_started(
+            session, int(info["pid"]), str(info["name"]))
 
     def _sync_new_threads(self):
         """Apply process rules to TIDs first observed after process startup."""
@@ -339,11 +358,14 @@ class MonitorThread(QThread):
             known_tids = self._known_tids_by_pid.setdefault(pid, set())
             new_tids = current_tids - known_tids
             for tid in sorted(new_tids):
+                if not self._rules_ready(info):
+                    continue
                 if self._rule_engine.matches_process(info["name"]):
                     self._rule_engine.apply_to_thread(pid, tid, info["name"])
                 elif (
                     default
                     and pid not in self._manually_overridden_pids
+                    and not (self._game_sessions and self._game_sessions.session_for_pid(pid))
                     and utils.set_thread_affinity(tid, default)
                 ):
                     self._emit_log(
@@ -428,11 +450,16 @@ class MonitorThread(QThread):
             except Exception:
                 procs = []
             by_pid = self._sync_processes(procs)
+            if self._game_sessions:
+                self._game_memberships = self._game_sessions.refresh(
+                    self._observed_records()
+                )
 
             # Give newly seen matching processes a short rule burst.
             if enforce_due:
                 for info in self._process_cache.values():
-                    self._rule_engine.apply_to_process(info["pid"], info["name"])
+                    if self._rules_ready(info):
+                        self._rule_engine.apply_to_process(info["pid"], info["name"])
                 self._sync_new_threads()
                 last_enforce = now
 
@@ -451,7 +478,9 @@ class MonitorThread(QThread):
                 pb_tick = now - last_pb_tick
                 last_pb_tick = now
                 self._probalance.tick(
-                    [info for info in snapshot if info["pid"] != os.getpid()],
+                    [info for info in snapshot
+                     if info["pid"] != os.getpid() and
+                     (info.pid, info.create_time) not in self._game_memberships],
                     pb_tick,
                 )
                 last_probalance = now

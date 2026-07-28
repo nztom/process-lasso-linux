@@ -34,6 +34,21 @@ class ResetAllTests(unittest.TestCase):
         )
         self.assertEqual(monitor._original_affinities, {})
 
+    @mock.patch("monitor.utils.set_affinity")
+    @mock.patch("builtins.open", new_callable=mock.mock_open, read_data="worker\n")
+    def test_disabled_default_stops_enforcement_without_changing_affinity(
+        self, _open, set_affinity
+    ):
+        monitor = MonitorThread(
+            RuleEngine(), ProBalance({}), {"cpu": {"default_affinity": None}}
+        )
+        monitor._known_pids = {101}
+
+        monitor.reapply_all_defaults()
+
+        set_affinity.assert_not_called()
+
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QHBoxLayout, QLineEdit, QLabel, QMessageBox,
 )
 from PyQt6.QtCore import pyqtSignal
+from gui.dialogs import NicePriorityDialog
 
 
 class ProBalanceTab(QWidget):
@@ -41,15 +42,25 @@ class ProBalanceTab(QWidget):
         self._consec_secs.setValue(cfg.get("consecutive_seconds", 3))
         form.addRow("Consecutive seconds above threshold:", self._consec_secs)
 
-        self._nice_adj = QSpinBox()
-        self._nice_adj.setRange(1, 19)
-        self._nice_adj.setValue(cfg.get("nice_adjustment", 10))
-        form.addRow("Nice adjustment (added on throttle):", self._nice_adj)
+        self._nice_adjustment = int(cfg.get("nice_adjustment", 10))
+        self._nice_floor_value = int(cfg.get("nice_floor", 15))
+        self._nice_adj_display = QLineEdit(f"Offset +{self._nice_adjustment}")
+        self._nice_adj_display.setReadOnly(True)
+        nice_adj_pick = QPushButton("Pick priority…")
+        nice_adj_pick.clicked.connect(self._pick_nice_adjustment)
+        nice_adj_row = QHBoxLayout()
+        nice_adj_row.addWidget(self._nice_adj_display)
+        nice_adj_row.addWidget(nice_adj_pick)
+        form.addRow("Nice adjustment (added on throttle):", nice_adj_row)
 
-        self._nice_floor = QSpinBox()
-        self._nice_floor.setRange(1, 19)
-        self._nice_floor.setValue(cfg.get("nice_floor", 15))
-        form.addRow("Nice floor (max nice applied):", self._nice_floor)
+        self._nice_floor_display = QLineEdit(f"Absolute {self._nice_floor_value}")
+        self._nice_floor_display.setReadOnly(True)
+        nice_floor_pick = QPushButton("Pick priority…")
+        nice_floor_pick.clicked.connect(self._pick_nice_floor)
+        nice_floor_row = QHBoxLayout()
+        nice_floor_row.addWidget(self._nice_floor_display)
+        nice_floor_row.addWidget(nice_floor_pick)
+        form.addRow("Nice floor (max nice applied):", nice_floor_row)
 
         layout.addWidget(throttle_group)
 
@@ -133,6 +144,36 @@ class ProBalanceTab(QWidget):
         self.settings_changed.emit(cfg)
         QMessageBox.information(self, "ProBalance", "Settings applied.")
 
+    def _pick_nice_adjustment(self):
+        dialog = NicePriorityDialog(
+            current_nice=0, parent=self, title_suffix="ProBalance Adjustment",
+            initial_mode="offset", initial_offset=self._nice_adjustment,
+        )
+        if dialog.exec() != NicePriorityDialog.DialogCode.Accepted:
+            return
+        value = dialog.get_offset() if dialog.get_mode() == "offset" else dialog.get_nice()
+        if not 1 <= value <= 19:
+            QMessageBox.warning(self, "Invalid ProBalance Adjustment",
+                                "Choose a positive adjustment from 1 to 19.")
+            return
+        self._nice_adjustment = value
+        self._nice_adj_display.setText(f"Offset +{value}")
+
+    def _pick_nice_floor(self):
+        dialog = NicePriorityDialog(
+            current_nice=self._nice_floor_value, parent=self,
+            title_suffix="ProBalance Floor", initial_mode="absolute",
+        )
+        if dialog.exec() != NicePriorityDialog.DialogCode.Accepted:
+            return
+        value = dialog.get_nice()
+        if dialog.get_mode() != "absolute" or not 1 <= value <= 19:
+            QMessageBox.warning(self, "Invalid ProBalance Floor",
+                                "Choose an absolute nice value from 1 to 19.")
+            return
+        self._nice_floor_value = value
+        self._nice_floor_display.setText(f"Absolute {value}")
+
     def get_config(self) -> dict:
         exempt = [
             self._exempt_list.item(i).text()
@@ -142,8 +183,8 @@ class ProBalanceTab(QWidget):
             "enabled": self._enabled_cb.isChecked(),
             "cpu_threshold_percent": self._cpu_thresh.value(),
             "consecutive_seconds": self._consec_secs.value(),
-            "nice_adjustment": self._nice_adj.value(),
-            "nice_floor": self._nice_floor.value(),
+            "nice_adjustment": self._nice_adjustment,
+            "nice_floor": self._nice_floor_value,
             "restore_threshold_percent": self._restore_thresh.value(),
             "restore_hysteresis_seconds": self._restore_hyst.value(),
             "exempt_patterns": exempt,

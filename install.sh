@@ -7,6 +7,7 @@ set -e
 
 INSTALL_DIR="$HOME/.local/share/process-lasso"
 LAUNCHER="/usr/local/bin/process-lasso"
+GAME_LAUNCHER="/usr/local/bin/process-lasso-game"
 DESKTOP="$HOME/.local/share/applications/process-lasso.desktop"
 SERVICE="$HOME/.config/systemd/user/process-lasso.service"
 
@@ -46,7 +47,7 @@ if [[ "$1" == "--uninstall" ]]; then
     fi
     info "Removing files..."
     rm -f "$DESKTOP" "$SERVICE"
-    sudo rm -f "$LAUNCHER" 2>/dev/null || warn "Could not remove $LAUNCHER (run with sudo manually)"
+    sudo rm -f "$LAUNCHER" "$GAME_LAUNCHER" 2>/dev/null || warn "Could not remove launchers (run with sudo manually)"
     info "Config preserved at ~/.config/process-lasso/ — remove manually if desired."
     info "App files preserved at $INSTALL_DIR — remove manually if desired."
     if command -v systemctl &>/dev/null; then
@@ -83,6 +84,11 @@ exec -a $PROCESS_NAME python3 $INSTALL_DIR/main.py \"\$@\"
 if command -v sudo &>/dev/null; then
     echo "$LAUNCHER_CONTENT" | sudo tee "$LAUNCHER" > /dev/null
     sudo chmod +x "$LAUNCHER"
+    GAME_LAUNCHER_CONTENT="#!/bin/bash
+exec python3 $INSTALL_DIR/process_lasso_game.py \"\$@\"
+"
+    echo "$GAME_LAUNCHER_CONTENT" | sudo tee "$GAME_LAUNCHER" > /dev/null
+    sudo chmod +x "$GAME_LAUNCHER"
     info "Launcher installed."
 else
     warn "sudo not available. Manually create $LAUNCHER:"
@@ -171,6 +177,7 @@ echo -e "${GREEN}Installation complete!${NC}"
 echo
 echo "  Start now:      process-lasso"
 echo "  Start service:  systemctl --user start process-lasso.service"
+echo "  Usage:           process-lasso-game %command%"
 echo "  Uninstall:      bash $INSTALL_DIR/install.sh --uninstall"
 echo
 echo "Asymmetric CPU controls (AMD X3D / Intel Hybrid):"

@@ -10,7 +10,7 @@ CONFIG_DIR = Path.home() / ".config" / "process-lasso"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
-    "version": 1,
+    "version": 2,
     "rules": [],
     "cpu": {
         # Applied to every process not matched by a specific rule.
@@ -38,7 +38,46 @@ DEFAULT_CONFIG = {
         "sort_column": "cpu_percent",
         "sort_order": "desc",
     },
+    "game_mode": {
+        "defaults_initialized": False,
+        "ccd_preference": "cache",
+        "affinity": None,
+        "nice": None,
+        "games": [],
+    },
 }
+
+
+def _compact_cpulist(cpus: set[int]) -> str | None:
+    if not cpus:
+        return None
+    ordered = sorted(cpus)
+    ranges = []
+    start = end = ordered[0]
+    for cpu in ordered[1:]:
+        if cpu == end + 1:
+            end = cpu
+        else:
+            ranges.append(f"{start}-{end}" if start != end else str(start))
+            start = end = cpu
+    ranges.append(f"{start}-{end}" if start != end else str(start))
+    return ",".join(ranges)
+
+
+def _initialize_game_mode_defaults(config: dict) -> dict:
+    """Populate hardware-aware defaults once, preserving later user choices."""
+    game_mode = config.setdefault("game_mode", {})
+    if game_mode.get("defaults_initialized", False):
+        return config
+    try:
+        import cpu_park
+        preferred = set(cpu_park.detect_topology().preferred)
+    except Exception:
+        preferred = set()
+    game_mode["affinity"] = _compact_cpulist(preferred)
+    game_mode["nice"] = {"type": "absolute", "value": -1}
+    game_mode["defaults_initialized"] = True
+    return config
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -59,10 +98,22 @@ def load() -> dict:
         try:
             with open(CONFIG_FILE, "r") as f:
                 data = json.load(f)
-            return _deep_merge(DEFAULT_CONFIG, data)
+            merged = _deep_merge(DEFAULT_CONFIG, data)
+            # Version 2 adds the Game Mode catalog and hardware-aware defaults;
+            # existing rules and unrelated settings remain lossless.
+            merged["version"] = 2
+            needs_game_defaults = not merged.get("game_mode", {}).get(
+                "defaults_initialized", False
+            )
+            merged = _initialize_game_mode_defaults(merged)
+            if needs_game_defaults:
+                save(merged)
+            return merged
         except (json.JSONDecodeError, OSError):
             pass
-    return copy.deepcopy(DEFAULT_CONFIG)
+    initialized = _initialize_game_mode_defaults(copy.deepcopy(DEFAULT_CONFIG))
+    save(initialized)
+    return initialized
 
 
 def save(config: dict) -> None:

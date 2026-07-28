@@ -22,6 +22,8 @@ from gui.rules_panel import RulesPanel
 from gui.probalance_tab import ProBalanceTab
 from gui.settings_tab import SettingsTab
 from gui.cpu_bars import CpuBarsWidget, CpuHistoryWidget
+from gui.game_mode_tab import GameModeTab
+from game_mode import GameIPCServer, GameSessionManager
 
 
 class MainWindow(QMainWindow):
@@ -32,6 +34,9 @@ class MainWindow(QMainWindow):
         self._rule_engine = RuleEngine()
         self._rule_engine.load_rules(self._config.get("rules", []))
         self._probalance = ProBalance(self._config.get("probalance", {}))
+        self._game_sessions = GameSessionManager(
+            self._config, save_callback=lambda: cfg_module.save(self._config)
+        )
 
         self.setWindowTitle("Process Lasso")
         self.setMinimumSize(860, 620)
@@ -56,6 +61,8 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_tray()
         self._start_monitor()
+        self._game_ipc = GameIPCServer(self._game_sessions)
+        self._game_ipc.start()
 
         if self._config.get("ui", {}).get("start_minimized", False):
             self.hide()
@@ -145,12 +152,19 @@ class MainWindow(QMainWindow):
         self._pb_tab.settings_changed.connect(self._on_pb_settings_changed)
         self._tabs.addTab(self._pb_tab, "ProBalance")
 
-        # Tab 4: Settings
+        # Tab 4: Game Mode
+        self._game_tab = GameModeTab(
+            self._config.setdefault("game_mode", {}), self._game_sessions
+        )
+        self._game_tab.settings_changed.connect(self._on_game_settings_changed)
+        self._tabs.addTab(self._game_tab, "Game Mode")
+
+        # Tab 5: Settings
         self._settings_tab = SettingsTab(self._config)
         self._settings_tab.settings_changed.connect(self._on_settings_changed)
         self._tabs.addTab(self._settings_tab, "Settings")
 
-        # Tab 5: Log
+        # Tab 6: Log
         log_widget = QWidget()
         log_layout = QVBoxLayout(log_widget)
 
@@ -198,12 +212,14 @@ class MainWindow(QMainWindow):
             rule_engine=self._rule_engine,
             probalance=self._probalance,
             config=self._config,
+            game_sessions=self._game_sessions,
         )
         self._monitor.process_snapshot_ready.connect(self._on_snapshot)
         self._monitor.cpu_snapshot_ready.connect(self._cpu_bars.update_cpu)
         self._monitor.cpu_snapshot_ready.connect(self._cpu_history.update_cpu)
         self._monitor.cpu_snapshot_ready.connect(self._on_cpu_for_tray)
         self._monitor.log_message.connect(self._append_log)
+        self._game_sessions._log = self._monitor._emit_log
         self._monitor.start()
 
     @pyqtSlot(list)
@@ -211,6 +227,7 @@ class MainWindow(QMainWindow):
         throttled = self._probalance.get_throttled_pids()
         self._proc_table.update_throttled(throttled)
         self._proc_table.update_snapshot(snapshot)
+        self._game_tab.refresh()
         count = len(snapshot)
         self._tabs.setTabText(0, f"Processes ({count})")
         pb_idx = self._tabs.indexOf(self._pb_tab)
@@ -330,9 +347,17 @@ class MainWindow(QMainWindow):
     @pyqtSlot(dict)
     def _on_settings_changed(self, updated_config: dict):
         self._config = updated_config
+        self._game_sessions.config = self._config
         self._monitor.update_config(self._config)
         # Re-apply default affinity to all currently running processes immediately
         self._monitor.reapply_all_defaults()
+        self._save_config()
+
+    @pyqtSlot(dict)
+    def _on_game_settings_changed(self, game_config: dict):
+        self._config["game_mode"] = game_config
+        self._game_sessions.config = self._config
+        self._game_sessions.set_ccd_preference(game_config.get("ccd_preference"))
         self._save_config()
 
     def _save_config(self):
@@ -355,6 +380,9 @@ class MainWindow(QMainWindow):
         self._save_config()
         self._monitor.stop()
         self._monitor.wait(3000)
+        self._game_ipc.stop()
+        self._game_ipc.join(1000)
+        self._game_sessions.shutdown()
         self._tray.hide()
         self._app.quit()
 

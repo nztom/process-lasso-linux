@@ -27,6 +27,21 @@ online and available to the system.
 
 ## Features
 
+### Game Mode
+
+Add this to a Steam game's launch options:
+
+```text
+process-lasso-game %command%
+```
+
+The wrapper asks the user service to resolve the Steam/native game identity,
+applies the inherited Game Mode affinity and nice policy before launch, and
+temporarily selects the configured AMD X3D CCD preference. The Game Mode tab
+edits defaults, per-game overrides, aliases, and identity merges and shows live
+sessions. Explicit Rules remain field-by-field authoritative after launch;
+ProBalance and the global default affinity do not alter active game sessions.
+
 ### Processes tab
 - Live process table — sortable by CPU%, memory, PID, nice, affinity, I/O
 - **Per-CPU utilization bars** — htop-style with colour ramp (green → yellow → orange → red by load)

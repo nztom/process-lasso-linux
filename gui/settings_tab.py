@@ -59,6 +59,7 @@ class SettingsTab(QWidget):
         row.addWidget(self._default_affinity_cb)
 
         self._default_affinity_edit = QLineEdit()
+        self._default_affinity_edit.setReadOnly(True)
         self._default_affinity_edit.setPlaceholderText("e.g. 8-15,24-31")
         self._default_affinity_edit.setMaximumWidth(160)
         row.addWidget(self._default_affinity_edit)
@@ -66,14 +67,6 @@ class SettingsTab(QWidget):
         pick_btn = QPushButton("Pick CPUs…")
         pick_btn.clicked.connect(self._pick_affinity)
         row.addWidget(pick_btn)
-
-        ccd_label = QLabel("Quick:")
-        row.addWidget(ccd_label)
-        for label, val in [("CCD0 (0-7,16-23)", "0-7,16-23"), ("CCD1 (8-15,24-31)", "8-15,24-31"), ("All", "")]:
-            btn = QPushButton(label)
-            btn.setMaximumWidth(130)
-            btn.clicked.connect(lambda checked, v=val: self._set_quick(v))
-            row.addWidget(btn)
 
         row.addStretch()
         cpu_layout.addLayout(row)
@@ -266,13 +259,15 @@ class SettingsTab(QWidget):
             self._default_affinity_edit.setText(cpulist)
             self._default_affinity_cb.setChecked(bool(cpulist))
 
-    def _set_quick(self, val: str):
-        self._default_affinity_edit.setText(val)
-        self._default_affinity_cb.setChecked(bool(val))
-
     def _apply_cpu(self):
         if not self._default_affinity_cb.isChecked():
-            QMessageBox.information(self, "Default Affinity", "Default affinity is disabled — nothing applied.")
+            self._config.setdefault("cpu", {})["default_affinity"] = None
+            self.settings_changed.emit(self._config)
+            QMessageBox.information(
+                self, "Default Affinity",
+                "Default affinity disabled. It will no longer be applied; "
+                "current process affinities are left unchanged."
+            )
             return
         cpulist = self._default_affinity_edit.text().strip()
         if cpulist and not utils.validate_cpulist(cpulist):

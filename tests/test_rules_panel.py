@@ -65,15 +65,10 @@ class RulesPanelLayoutTests(unittest.TestCase):
 
     def test_rule_editor_shows_only_selected_priority_controls(self):
         dialog = RuleEditDialog(Rule(pattern="game", nice=0))
-        self.assertEqual(dialog._nice_controls.currentIndex(), 0)
-        self.assertTrue(dialog._nice_spin.isEnabled())
-        self.assertFalse(dialog._nice_offset_spin.isEnabled())
-
-        dialog._nice_mode.setCurrentIndex(dialog._nice_mode.findData("offset"))
-
-        self.assertEqual(dialog._nice_controls.currentIndex(), 1)
-        self.assertFalse(dialog._nice_spin.isEnabled())
-        self.assertTrue(dialog._nice_offset_spin.isEnabled())
+        self.assertTrue(dialog._nice_display.isReadOnly())
+        self.assertTrue(dialog._nice_display.isEnabled())
+        self.assertTrue(dialog._nice_pick_btn.isEnabled())
+        self.assertEqual(dialog._nice_display.text(), "Absolute 0")
 
 
 if __name__ == "__main__":

@@ -237,11 +237,14 @@ class NicePriorityDialog(QDialog):
     def __init__(
         self, current_nice: int = 0, parent=None, title_suffix: str = "",
         initial_mode: str = "absolute", initial_offset: int = 0,
+        initial_floor: int = -15, initial_ceiling: int = 19,
     ):
         super().__init__(parent)
         self.setWindowTitle(f"Set CPU Priority (nice){' — ' + title_suffix if title_suffix else ''}")
         self._initial_mode = initial_mode if initial_mode == "offset" else "absolute"
         self._initial_offset = max(-39, min(39, initial_offset))
+        self._initial_floor = max(-20, min(19, initial_floor))
+        self._initial_ceiling = max(self._initial_floor, min(19, initial_ceiling))
         self._build_ui(current_nice)
 
     def _build_ui(self, current_nice: int):
@@ -271,6 +274,22 @@ class NicePriorityDialog(QDialog):
         row.addStretch()
         layout.addLayout(row)
 
+        self._bounds = QWidget()
+        bounds_row = QHBoxLayout(self._bounds)
+        bounds_row.setContentsMargins(0, 0, 0, 0)
+        bounds_row.addWidget(QLabel("Offset bounds — floor:"))
+        self._floor_spin = QSpinBox()
+        self._floor_spin.setRange(-20, 19)
+        self._floor_spin.setValue(self._initial_floor)
+        bounds_row.addWidget(self._floor_spin)
+        bounds_row.addWidget(QLabel("ceiling:"))
+        self._ceiling_spin = QSpinBox()
+        self._ceiling_spin.setRange(-20, 19)
+        self._ceiling_spin.setValue(self._initial_ceiling)
+        bounds_row.addWidget(self._ceiling_spin)
+        bounds_row.addStretch()
+        layout.addWidget(self._bounds)
+
         self._mode.currentIndexChanged.connect(self._update_mode)
         self._spin.valueChanged.connect(self._update_target)
         self._mode.setCurrentIndex(self._mode.findData(self._initial_mode))
@@ -297,7 +316,7 @@ class NicePriorityDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
@@ -318,6 +337,18 @@ class NicePriorityDialog(QDialog):
     def get_offset(self) -> int:
         return self._spin.value() if self.get_mode() == "offset" else 0
 
+    def get_floor(self) -> int:
+        return self._floor_spin.value()
+
+    def get_ceiling(self) -> int:
+        return self._ceiling_spin.value()
+
+    def _validate_and_accept(self):
+        if self.get_mode() == "offset" and self.get_floor() > self.get_ceiling():
+            QMessageBox.warning(self, "Invalid", "Nice floor cannot exceed ceiling.")
+            return
+        self.accept()
+
     def _set_absolute(self, value: int):
         self._mode.setCurrentIndex(self._mode.findData("absolute"))
         self._spin.setValue(value)
@@ -335,6 +366,7 @@ class NicePriorityDialog(QDialog):
                 else 0 if offset else self._current_nice
             )
         self._update_target()
+        self._bounds.setVisible(offset)
 
     def _update_target(self):
         if self._mode.currentData() == "offset":
@@ -572,22 +604,20 @@ class RuleEditDialog(QDialog):
         self._affinity_cb.toggled.connect(self._affinity_pick_btn.setEnabled)
 
         self._nice_cb = QCheckBox("Enable")
-        self._nice_spin = QSpinBox()
-        self._nice_spin.setRange(-20, 19)
-        self._nice_spin.setEnabled(False)
-        self._nice_mode = QComboBox()
-        self._nice_mode.addItem("Absolute", "absolute")
-        self._nice_mode.addItem("Offset", "offset")
-        self._nice_offset_spin = QSpinBox()
-        self._nice_offset_spin.setRange(-39, 39)
-        self._nice_floor_spin = QSpinBox()
-        self._nice_floor_spin.setRange(-20, 19)
-        self._nice_floor_spin.setValue(-15)
-        self._nice_ceiling_spin = QSpinBox()
-        self._nice_ceiling_spin.setRange(-20, 19)
-        self._nice_ceiling_spin.setValue(19)
-        self._nice_cb.toggled.connect(self._update_nice_controls)
-        self._nice_mode.currentIndexChanged.connect(self._update_nice_controls)
+        self._nice_display = QLineEdit()
+        self._nice_display.setReadOnly(True)
+        self._nice_display.setEnabled(False)
+        self._nice_display.setPlaceholderText("no nice policy set")
+        self._nice_pick_btn = QPushButton("Pick priority…")
+        self._nice_pick_btn.setEnabled(False)
+        self._nice_pick_btn.clicked.connect(self._pick_nice)
+        self._nice_cb.toggled.connect(self._nice_display.setEnabled)
+        self._nice_cb.toggled.connect(self._nice_pick_btn.setEnabled)
+        self._nice_value = 0
+        self._nice_mode_value = "absolute"
+        self._nice_offset_value = 0
+        self._nice_floor_value = -15
+        self._nice_ceiling_value = 19
 
         self._ionice_cb = QCheckBox("Enable")
         self._ionice_class_combo = QComboBox()
@@ -622,30 +652,8 @@ class RuleEditDialog(QDialog):
 
         nice_row = QHBoxLayout()
         nice_row.addWidget(self._nice_cb)
-        nice_row.addWidget(self._nice_mode)
-
-        absolute_page = QWidget()
-        absolute_layout = QHBoxLayout(absolute_page)
-        absolute_layout.setContentsMargins(0, 0, 0, 0)
-        absolute_layout.addWidget(QLabel("Nice value:"))
-        absolute_layout.addWidget(self._nice_spin)
-        absolute_layout.addStretch()
-
-        offset_page = QWidget()
-        offset_layout = QHBoxLayout(offset_page)
-        offset_layout.setContentsMargins(0, 0, 0, 0)
-        offset_layout.addWidget(QLabel("Offset:"))
-        offset_layout.addWidget(self._nice_offset_spin)
-        offset_layout.addWidget(QLabel("Floor:"))
-        offset_layout.addWidget(self._nice_floor_spin)
-        offset_layout.addWidget(QLabel("Ceiling:"))
-        offset_layout.addWidget(self._nice_ceiling_spin)
-        offset_layout.addStretch()
-
-        self._nice_controls = QStackedWidget()
-        self._nice_controls.addWidget(absolute_page)
-        self._nice_controls.addWidget(offset_page)
-        nice_row.addWidget(self._nice_controls)
+        nice_row.addWidget(self._nice_display)
+        nice_row.addWidget(self._nice_pick_btn)
         nice_row.addStretch()
         form.addRow("Nice priority:", nice_row)
 
@@ -680,13 +688,12 @@ class RuleEditDialog(QDialog):
                 self._affinity_display.setText(self._rule.affinity)
             if self._rule.nice is not None:
                 self._nice_cb.setChecked(True)
-                self._nice_spin.setValue(self._rule.nice)
-                self._nice_mode.setCurrentIndex(
-                    max(0, self._nice_mode.findData(self._rule.nice_mode))
-                )
-                self._nice_offset_spin.setValue(self._rule.nice_offset)
-                self._nice_floor_spin.setValue(self._rule.nice_floor)
-                self._nice_ceiling_spin.setValue(self._rule.nice_ceiling)
+                self._nice_value = self._rule.nice
+                self._nice_mode_value = self._rule.nice_mode
+                self._nice_offset_value = self._rule.nice_offset
+                self._nice_floor_value = self._rule.nice_floor
+                self._nice_ceiling_value = self._rule.nice_ceiling
+                self._refresh_nice_display()
             if self._rule.ionice_class is not None:
                 self._ionice_cb.setChecked(True)
                 idx2 = next(
@@ -699,17 +706,35 @@ class RuleEditDialog(QDialog):
             self._enabled_cb.setChecked(self._rule.enabled)
             self._force_apply_cb.setChecked(self._rule.force_apply)
 
-        self._update_nice_controls()
+        self._refresh_nice_display()
 
-    def _update_nice_controls(self):
-        enabled = self._nice_cb.isChecked()
-        offset = self._nice_mode.currentData() == "offset"
-        self._nice_mode.setEnabled(enabled)
-        self._nice_controls.setCurrentIndex(1 if offset else 0)
-        self._nice_controls.setEnabled(enabled)
-        self._nice_spin.setEnabled(enabled and not offset)
-        for control in (self._nice_offset_spin, self._nice_floor_spin, self._nice_ceiling_spin):
-            control.setEnabled(enabled and offset)
+    def _refresh_nice_display(self):
+        if self._nice_mode_value == "offset":
+            self._nice_display.setText(
+                f"Offset {self._nice_offset_value:+d} "
+                f"[{self._nice_floor_value}, {self._nice_ceiling_value}]"
+            )
+        else:
+            self._nice_display.setText(f"Absolute {self._nice_value}")
+
+    def _pick_nice(self):
+        dialog = NicePriorityDialog(
+            current_nice=self._nice_value,
+            parent=self,
+            title_suffix="Rule",
+            initial_mode=self._nice_mode_value,
+            initial_offset=self._nice_offset_value,
+            initial_floor=self._nice_floor_value,
+            initial_ceiling=self._nice_ceiling_value,
+        )
+        if dialog.exec() != NicePriorityDialog.DialogCode.Accepted:
+            return
+        self._nice_mode_value = dialog.get_mode()
+        self._nice_value = dialog.get_nice() if self._nice_mode_value == "absolute" else 0
+        self._nice_offset_value = dialog.get_offset()
+        self._nice_floor_value = dialog.get_floor()
+        self._nice_ceiling_value = dialog.get_ceiling()
+        self._refresh_nice_display()
 
     def _pick_affinity(self):
         """Open topology-aware CPU picker and store result in the display field."""
@@ -751,11 +776,6 @@ class RuleEditDialog(QDialog):
             except re.error as exc:
                 QMessageBox.warning(self, "Validation", f"Invalid regular expression:\n{exc}")
                 return
-        if (self._nice_cb.isChecked()
-                and self._nice_mode.currentData() == "offset"
-                and self._nice_floor_spin.value() > self._nice_ceiling_spin.value()):
-            QMessageBox.warning(self, "Validation", "Nice floor cannot exceed ceiling.")
-            return
         self.accept()
 
     def get_rule(self):
@@ -765,7 +785,7 @@ class RuleEditDialog(QDialog):
 
         rule_id = self._rule.rule_id if self._rule else None
         affinity = self._affinity_display.text().strip() if self._affinity_cb.isChecked() else None
-        nice = self._nice_spin.value() if self._nice_cb.isChecked() else None
+        nice = self._nice_value if self._nice_cb.isChecked() else None
         ionice_class = self._ionice_class_combo.currentData() if self._ionice_cb.isChecked() else None
         ionice_level = self._ionice_level_spin.value() if self._ionice_cb.isChecked() else None
 
@@ -775,10 +795,10 @@ class RuleEditDialog(QDialog):
             match_type=self._match_combo.currentText(),
             affinity=affinity,
             nice=nice,
-            nice_mode=self._nice_mode.currentData(),
-            nice_offset=self._nice_offset_spin.value(),
-            nice_floor=self._nice_floor_spin.value(),
-            nice_ceiling=self._nice_ceiling_spin.value(),
+            nice_mode=self._nice_mode_value,
+            nice_offset=self._nice_offset_value,
+            nice_floor=self._nice_floor_value,
+            nice_ceiling=self._nice_ceiling_value,
             ionice_class=ionice_class,
             ionice_level=ionice_level,
             enabled=self._enabled_cb.isChecked(),

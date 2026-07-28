@@ -120,6 +120,12 @@ class ProcessPolicyView(Mapping[str, object]):
     observed: ProcessSnapshot
     effective_policy: EffectiveProcessPolicy
     manually_overridden: bool = False
+    game_id: str | None = None
+    game_name: str | None = None
+
+    @property
+    def is_game(self) -> bool:
+        return self.game_id is not None or self.game_name is not None
 
     def __getitem__(self, key: str) -> object:
         return self.observed[key]

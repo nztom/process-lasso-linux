@@ -295,6 +295,8 @@ class ProcessTable(QTableWidget):
                         proc.observed.name
                     ),
                     manually_overridden=proc.manually_overridden,
+                    game_id=proc.game_id,
+                    game_name=proc.game_name,
                 )
                 for proc in self._snapshot
             ]
@@ -335,7 +337,7 @@ class ProcessTable(QTableWidget):
             9: lambda p: effective_policy(p).affinity or "",
             10: lambda p: p["ionice"],
             11: lambda p: format_io_priority_policy(effective_policy(p).ionice),
-            12: lambda p: "",
+            12: lambda p: "game" if isinstance(p, ProcessPolicyView) and p.is_game else "",
             13: lambda p: p.get("cmdline", "").lower(),
         }
         key_fn = key_map.get(self._sort_col, lambda p: 0)
@@ -395,7 +397,8 @@ class ProcessTable(QTableWidget):
                 policy.affinity or "",
                 proc.get("ionice", ""),
                 format_io_priority_policy(policy.ionice),
-                "⏸ Throttled" if throttled else "",
+                "🔥 Game" if isinstance(proc, ProcessPolicyView) and proc.is_game
+                else ("⏸ Throttled" if throttled else ""),
                 proc.get("cmdline", ""),
             ]
             # Pick row text color based on CPU usage or throttle state
