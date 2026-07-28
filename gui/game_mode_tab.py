@@ -225,6 +225,7 @@ class GameModeTab(QWidget):
         self._games.setHorizontalHeaderLabels(["Name", "Source aliases", "Executable aliases", "Affinity", "Nice"])
         self._games.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._games.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._games.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._games.cellDoubleClicked.connect(
             lambda selected_row, _column: self._edit_selected_profile(selected_row)
         )
@@ -232,12 +233,13 @@ class GameModeTab(QWidget):
         row = QHBoxLayout()
         edit_profile = QPushButton("Edit Selected Profile…")
         edit_profile.clicked.connect(lambda: self._edit_selected_profile())
-        save_profiles = QPushButton("Save profile edits")
-        save_profiles.clicked.connect(self._save_profiles)
         merge = QPushButton("Merge selected identities")
+        merge.setToolTip(
+            "Keep the first selected profile and its settings, combine aliases "
+            "from the other selected profiles into it, then remove those profiles."
+        )
         merge.clicked.connect(self._merge_selected)
         row.addWidget(edit_profile)
-        row.addWidget(save_profiles)
         row.addWidget(merge)
         row.addStretch()
         layout.addLayout(row)
@@ -249,6 +251,15 @@ class GameModeTab(QWidget):
         )
         self._active.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._active.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._active.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._active.setHorizontalScrollMode(
+            QAbstractItemView.ScrollMode.ScrollPerPixel
+        )
+        self._active.horizontalScrollBar().setSingleStep(12)
+        self._active.setVerticalScrollMode(
+            QAbstractItemView.ScrollMode.ScrollPerPixel
+        )
+        self._active.verticalScrollBar().setSingleStep(12)
         layout.addWidget(self._active)
         active_actions = QHBoxLayout()
         self._create_running_profile = QPushButton(
@@ -444,13 +455,6 @@ class GameModeTab(QWidget):
             return
         self.settings_changed.emit(self._config)
         self.refresh()
-
-    def _save_profiles(self):
-        for row, game in enumerate(self._config.get("games", [])):
-            game["name"] = self._games.item(row, 0).text().strip()
-            game["source_aliases"] = [x.strip() for x in self._games.item(row, 1).text().split(",") if x.strip()]
-            game["executable_aliases"] = [x.strip().casefold() for x in self._games.item(row, 2).text().split(",") if x.strip()]
-        self.settings_changed.emit(self._config)
 
     def _edit_selected_profile(self, selected_row=None):
         row = self._games.currentRow() if selected_row is None else selected_row

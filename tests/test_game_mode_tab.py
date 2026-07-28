@@ -8,7 +8,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QDialog
+from PyQt6.QtWidgets import QApplication, QDialog, QPushButton
 
 from gui.game_mode_tab import GameModeTab, RunningGameProfileDialog
 
@@ -74,6 +74,35 @@ class GameModeTabTests(unittest.TestCase):
             self.tab._active.item(0, 4).text(), "gamemoderun SpaceGame.exe"
         )
         self.assertTrue(self.tab._create_running_profile.isEnabled())
+
+    def test_active_game_list_scrolls_smoothly_and_is_read_only(self):
+        self.assertEqual(
+            self.tab._active.horizontalScrollMode(),
+            self.tab._active.ScrollMode.ScrollPerPixel,
+        )
+        self.assertEqual(self.tab._active.horizontalScrollBar().singleStep(), 12)
+        self.assertEqual(
+            self.tab._active.verticalScrollMode(),
+            self.tab._active.ScrollMode.ScrollPerPixel,
+        )
+        self.assertEqual(self.tab._active.verticalScrollBar().singleStep(), 12)
+        self.assertEqual(
+            self.tab._active.editTriggers(),
+            self.tab._active.EditTrigger.NoEditTriggers,
+        )
+
+    def test_game_profiles_table_is_read_only(self):
+        self.assertEqual(
+            self.tab._games.editTriggers(),
+            self.tab._games.EditTrigger.NoEditTriggers,
+        )
+        self.assertFalse(hasattr(self.tab, "_save_profiles"))
+        merge = next(
+            button for button in self.tab.findChildren(QPushButton)
+            if button.text() == "Merge selected identities"
+        )
+        self.assertIn("first selected profile", merge.toolTip())
+        self.assertIn("combine aliases", merge.toolTip())
 
     def test_indicator_changes_when_game_mode_becomes_inactive(self):
         self.tab._sessions.sessions.clear()
