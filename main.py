@@ -45,9 +45,8 @@ def main():
     app.setApplicationDisplayName("Process Lasso")
     app.setOrganizationName("process-lasso")
 
-    startup_config = config.load()
-    if not startup_config.get("ui", {}).get("use_system_theme", False):
-        app.setStyleSheet(WINDOWS_DARK_THEME)
+    config.load()
+    app.setStyleSheet(WINDOWS_DARK_THEME)
     app.setProperty("pl_dark_theme_css", WINDOWS_DARK_THEME)
 
     # Closing the main window hides it to the system tray.

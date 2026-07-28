@@ -21,7 +21,6 @@ from gui.process_table import ProcessTable
 from gui.rules_panel import RulesPanel
 from gui.probalance_tab import ProBalanceTab
 from gui.settings_tab import SettingsTab
-from gui.gaming_mode_tab import GamingModeTab
 from gui.cpu_bars import CpuBarsWidget, CpuHistoryWidget
 
 
@@ -57,10 +56,6 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_tray()
         self._start_monitor()
-
-        # Apply opacity from config
-        opacity = self._config.get("ui", {}).get("opacity", 100.0)
-        self.setWindowOpacity(opacity / 100.0)
 
         if self._config.get("ui", {}).get("start_minimized", False):
             self.hide()
@@ -113,6 +108,15 @@ class MainWindow(QMainWindow):
         self._proc_table.rule_add_requested.connect(self._on_rule_add_from_table)
         self._proc_table.rule_remove_requested.connect(self._on_rules_removed_from_table)
         self._proc_table.rule_value_manually_changed.connect(self._on_rule_value_manual_change)
+        self._proc_table.probalance_exclude_requested.connect(
+            self._on_probalance_exclude_requested
+        )
+        self._proc_table.probalance_include_requested.connect(
+            self._on_probalance_include_requested
+        )
+        self._proc_table.update_probalance_exemptions(
+            self._config.get("probalance", {}).get("exempt_patterns", [])
+        )
         self._proc_filter.textChanged.connect(self._proc_table.set_filter)
         self._user_filter.currentIndexChanged.connect(self._on_user_filter_changed)
         self._show_root.toggled.connect(
@@ -141,22 +145,12 @@ class MainWindow(QMainWindow):
         self._pb_tab.settings_changed.connect(self._on_pb_settings_changed)
         self._tabs.addTab(self._pb_tab, "ProBalance")
 
-        # Tab 4: Gaming Mode
-        self._gaming_tab = GamingModeTab(self._config)
-        self._gaming_tab.log_message.connect(self._append_log)
-        self._gaming_tab.gaming_mode_changed.connect(self._on_gaming_mode_changed)
-        self._gaming_tab.config_changed.connect(self._on_gaming_config_changed)
-        self._tabs.addTab(self._gaming_tab, "Gaming Mode")
-
-        # Tab 5: Settings
+        # Tab 4: Settings
         self._settings_tab = SettingsTab(self._config)
         self._settings_tab.settings_changed.connect(self._on_settings_changed)
-        self._settings_tab.helper_changed.connect(self._gaming_tab.refresh_helper_state)
-        self._settings_tab.reset_requested.connect(self._on_reset_requested)
-        self._gaming_tab.helper_changed.connect(self._settings_tab.refresh_helper_state)
         self._tabs.addTab(self._settings_tab, "Settings")
 
-        # Tab 6: Log
+        # Tab 5: Log
         log_widget = QWidget()
         log_layout = QVBoxLayout(log_widget)
 
@@ -189,15 +183,9 @@ class MainWindow(QMainWindow):
         show_action = QAction("Show / Hide", self)
         show_action.triggered.connect(self._toggle_window)
 
-        self._tray_gaming_action = QAction("▶  Enable Gaming Mode", self)
-        self._tray_gaming_action.triggered.connect(self._gaming_tab._toggle_gaming_mode)
-        self._gaming_tab.gaming_mode_changed.connect(self._update_tray_gaming_action)
-
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self._quit_app)
         menu.addAction(show_action)
-        menu.addAction(self._tray_gaming_action)
-        menu.addSeparator()
         menu.addAction(quit_action)
         self._tray.setContextMenu(menu)
         self._tray.activated.connect(self._on_tray_activated)
@@ -217,12 +205,6 @@ class MainWindow(QMainWindow):
         self._monitor.cpu_snapshot_ready.connect(self._on_cpu_for_tray)
         self._monitor.log_message.connect(self._append_log)
         self._monitor.start()
-
-        # Sync Gaming Mode: if the app started with CPUs already parked the
-        # gaming_mode_changed signal fired during GamingModeTab.__init__ before
-        # the monitor existed — notify it now.
-        if self._gaming_tab._parked:
-            self._monitor.set_gaming_mode(True, self._gaming_tab._nice_cb.isChecked())
 
     @pyqtSlot(list)
     def _on_snapshot(self, snapshot: list):
@@ -253,22 +235,10 @@ class MainWindow(QMainWindow):
             sb = self._log_edit.verticalScrollBar()
             sb.setValue(sb.maximum())
 
-    @pyqtSlot(bool, bool)
-    def _update_tray_gaming_action(self, active: bool, _):
-        if active:
-            self._tray_gaming_action.setText("⏹  Disable Gaming Mode")
-        else:
-            self._tray_gaming_action.setText("▶  Enable Gaming Mode")
-
     @pyqtSlot(list)
     def _on_cpu_for_tray(self, percpu: list):
         avg = sum(percpu) / len(percpu) if percpu else 0.0
         self._tray.setToolTip(f"Process Lasso — CPU avg {avg:.0f}%")
-
-    @pyqtSlot(dict)
-    def _on_gaming_config_changed(self, cfg: dict):
-        self._config = cfg
-        self._save_config()
 
     def _on_rules_changed(self):
         self._save_config()
@@ -280,6 +250,44 @@ class MainWindow(QMainWindow):
 
     def _on_user_filter_changed(self, index: int):
         self._proc_table.set_user_filter(self._user_filter.itemData(index) or "")
+
+    @pyqtSlot(str)
+    def _on_probalance_exclude_requested(self, process_name: str):
+        pattern = process_name.strip()
+        if not pattern:
+            return
+        pb_config = self._config.setdefault("probalance", {})
+        exemptions = pb_config.setdefault("exempt_patterns", [])
+        if not any(existing.lower() == pattern.lower() for existing in exemptions):
+            exemptions.append(pattern)
+        self._pb_tab.add_exemption(pattern)
+        # update_config restores any newly exempted throttled process now.
+        self._probalance.update_config(pb_config)
+        self._proc_table.update_probalance_exemptions(exemptions)
+        self._proc_table.update_throttled(self._probalance.get_throttled_pids())
+        self._save_config()
+        self._append_log(f"[ProBalance] Excluded process pattern: {pattern}")
+
+    @pyqtSlot(str)
+    def _on_probalance_include_requested(self, process_name: str):
+        name = process_name.strip()
+        if not name:
+            return
+        pb_config = self._config.setdefault("probalance", {})
+        exemptions = pb_config.setdefault("exempt_patterns", [])
+        matching = [pattern for pattern in exemptions if pattern.lower() in name.lower()]
+        if not matching:
+            return
+        pb_config["exempt_patterns"] = [
+            pattern for pattern in exemptions if pattern not in matching
+        ]
+        self._pb_tab.remove_exemptions(matching)
+        self._probalance.update_config(pb_config)
+        self._proc_table.update_probalance_exemptions(pb_config["exempt_patterns"])
+        self._save_config()
+        self._append_log(
+            f"[ProBalance] Included {name}; removed exemption(s): {', '.join(matching)}"
+        )
 
     def _update_user_filter(self, users: list[str]):
         """Refresh user choices without discarding the active selection."""
@@ -315,20 +323,9 @@ class MainWindow(QMainWindow):
     def _on_pb_settings_changed(self, pb_cfg: dict):
         self._config["probalance"] = pb_cfg
         self._probalance.update_config(pb_cfg)
+        self._proc_table.update_probalance_exemptions(pb_cfg.get("exempt_patterns", []))
         self._monitor.update_config(self._config)
         self._save_config()
-
-    @pyqtSlot()
-    def _on_reset_requested(self):
-        self._gaming_tab.reset_all_changes()
-        self._monitor.reset_all_affinities()
-
-    @pyqtSlot(bool, bool)
-    def _on_gaming_mode_changed(self, active: bool, elevate_nice: bool):
-        self._monitor.set_gaming_mode(active, elevate_nice)
-        # Parking clips masks to online CPUs; unparking does not expand them
-        # automatically. Reapply after either topology change.
-        self._monitor.reapply_all_defaults()
 
     @pyqtSlot(dict)
     def _on_settings_changed(self, updated_config: dict):
@@ -337,16 +334,6 @@ class MainWindow(QMainWindow):
         # Re-apply default affinity to all currently running processes immediately
         self._monitor.reapply_all_defaults()
         self._save_config()
-        self._apply_theme()
-
-    def _apply_theme(self):
-        """Switch between custom dark theme and system theme."""
-        use_system = self._config.get("ui", {}).get("use_system_theme", False)
-        if use_system:
-            self._app.setStyleSheet("")
-        else:
-            dark_css = self._app.property("pl_dark_theme_css") or ""
-            self._app.setStyleSheet(dark_css)
 
     def _save_config(self):
         self._config["rules"] = self._rule_engine.to_dict_list()

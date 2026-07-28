@@ -7,9 +7,9 @@ import shlex
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout,
     QLabel, QLineEdit, QPushButton, QCheckBox, QSpinBox, QMessageBox,
-    QSlider, QFrame, QInputDialog,
+    QFrame, QInputDialog, QComboBox,
 )
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal
 import subprocess
 
 import utils
@@ -21,15 +21,24 @@ from gui.dialogs import AffinityDialog
 class SettingsTab(QWidget):
     settings_changed = pyqtSignal(dict)   # emits full updated config dict
     helper_changed = pyqtSignal()
-    reset_requested = pyqtSignal()
 
     def __init__(self, config: dict, parent=None):
         super().__init__(parent)
         self._config = config
+        self._topology = cpu_park.detect_topology()
+        self._x3d_supported = False
         self._build_ui()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
+
+        # ── Detected CPU topology ─────────────────────────────────────────
+        topology_group = QGroupBox("Detected CPU Topology")
+        topology_layout = QVBoxLayout(topology_group)
+        self._topology_label = QLabel(self._topology.description)
+        self._topology_label.setWordWrap(True)
+        topology_layout.addWidget(self._topology_label)
+        layout.addWidget(topology_group)
 
         # ── Default CPU Affinity ────────────────────────────────────────────
         cpu_group = QGroupBox("Default CPU Affinity")
@@ -75,6 +84,33 @@ class SettingsTab(QWidget):
 
         layout.addWidget(cpu_group)
 
+        # ── AMD X3D scheduler preference ──────────────────────────────────
+        # This is a system-wide hardware scheduler setting, not a process mode.
+        self._x3d_group = QGroupBox("AMD X3D — Scheduler Preferred CCD")
+        x3d_layout = QVBoxLayout(self._x3d_group)
+        x3d_desc = QLabel(
+            "Select which CCD Linux should fill first. Both CCDs remain online; "
+            "this changes scheduler core rankings rather than CPU affinity."
+        )
+        x3d_desc.setWordWrap(True)
+        x3d_layout.addWidget(x3d_desc)
+
+        x3d_row = QHBoxLayout()
+        x3d_row.addWidget(QLabel("Prefer:"))
+        self._x3d_mode_combo = QComboBox()
+        self._x3d_mode_combo.addItem("V-Cache CCD (cache-sensitive / games)", "cache")
+        self._x3d_mode_combo.addItem("Frequency CCD (higher clocks / compute)", "frequency")
+        x3d_row.addWidget(self._x3d_mode_combo)
+        self._x3d_apply_btn = QPushButton("Apply")
+        self._x3d_apply_btn.clicked.connect(self._apply_x3d_mode)
+        x3d_row.addWidget(self._x3d_apply_btn)
+        self._x3d_status = QLabel()
+        x3d_row.addWidget(self._x3d_status)
+        x3d_row.addStretch()
+        x3d_layout.addLayout(x3d_row)
+        self._x3d_group.setVisible(False)
+        layout.addWidget(self._x3d_group)
+
         # ── Monitor intervals ───────────────────────────────────────────────
         mon_group = QGroupBox("Monitor Intervals")
         mon_form = QFormLayout(mon_group)
@@ -97,34 +133,6 @@ class SettingsTab(QWidget):
 
         layout.addWidget(mon_group)
 
-        # ── Appearance ──────────────────────────────────────────────────────
-        appear_group = QGroupBox("Appearance")
-        appear_layout = QVBoxLayout(appear_group)
-
-        self._system_theme_cb = QCheckBox("Use system theme (disables Process Lasso theme)")
-        self._system_theme_cb.setToolTip(
-            "When checked, Process Lasso uses your OS/desktop dark/light theme\n"
-            "instead of the built-in Breeze Dark stylesheet."
-        )
-        appear_layout.addWidget(self._system_theme_cb)
-
-        opacity_row = QHBoxLayout()
-        opacity_row.addWidget(QLabel("Window opacity:"))
-        self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self._opacity_slider.setRange(20, 100)
-        self._opacity_slider.setValue(100)
-        self._opacity_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._opacity_slider.setTickInterval(10)
-        self._opacity_label = QLabel("100%")
-        self._opacity_slider.valueChanged.connect(
-            lambda v: self._opacity_label.setText(f"{v}%")
-        )
-        opacity_row.addWidget(self._opacity_slider)
-        opacity_row.addWidget(self._opacity_label)
-        appear_layout.addLayout(opacity_row)
-
-        layout.addWidget(appear_group)
-
         # ── Autostart ────────────────────────────────────────────────────────
         auto_group = QGroupBox("Autostart")
         auto_layout = QVBoxLayout(auto_group)
@@ -143,7 +151,7 @@ class SettingsTab(QWidget):
         helper_group = QGroupBox("Root Helper")
         helper_layout = QVBoxLayout(helper_group)
         helper_desc = QLabel(
-            "Installs the privileged helper used for CPU parking and negative nice values."
+            "Installs the privileged helper used for negative nice values and AMD X3D controls."
         )
         helper_desc.setWordWrap(True)
         helper_layout.addWidget(helper_desc)
@@ -160,42 +168,60 @@ class SettingsTab(QWidget):
         helper_layout.addWidget(helper_frame)
         layout.addWidget(helper_group)
 
-        # ── Reset All Changes ──────────────────────────────────────────────
-        reset_group = QGroupBox("Reset All Changes")
-        reset_layout = QVBoxLayout(reset_group)
-        reset_desc = QLabel(
-            "Restores all per-process CPU affinities and priority changes made by "
-            "Process Lasso, then unparks any parked CPUs."
-        )
-        reset_desc.setWordWrap(True)
-        reset_layout.addWidget(reset_desc)
-        reset_btn = QPushButton("↩  Reset All Changes")
-        reset_btn.setMinimumHeight(36)
-        reset_btn.clicked.connect(self._reset_all)
-        reset_layout.addWidget(reset_btn)
-        layout.addWidget(reset_group)
-
         layout.addStretch()
 
         self._load_config()
         self._update_helper_status()
+        self._refresh_x3d_mode()
+
+    def _refresh_x3d_mode(self):
+        self._x3d_supported = cpu_park.has_dual_ccd_x3d_control(self._topology)
+        self._x3d_group.setVisible(self._x3d_supported)
+        if not self._x3d_supported:
+            return
+
+        mode = cpu_park.get_x3d_mode()
+        index = self._x3d_mode_combo.findData(mode)
+        if index >= 0:
+            self._x3d_mode_combo.setCurrentIndex(index)
+        label = "V-Cache CCD preferred" if mode == "cache" else "Frequency CCD preferred"
+        self._x3d_status.setText(f"Current: {label}")
+
+        helper_ready = cpu_park.is_helper_current() and cpu_park.is_sudoers_installed()
+        self._x3d_apply_btn.setEnabled(helper_ready)
+        self._x3d_apply_btn.setToolTip(
+            "" if helper_ready else "Install or update the privileged helper first."
+        )
+
+    def _apply_x3d_mode(self):
+        mode = self._x3d_mode_combo.currentData()
+        ok, message = cpu_park.set_x3d_mode(mode)
+        if not ok:
+            QMessageBox.warning(self, "AMD X3D Preference", message)
+            return
+        self._refresh_x3d_mode()
+        label = "V-Cache" if mode == "cache" else "Frequency"
+        QMessageBox.information(
+            self, "AMD X3D Preference", f"Linux now prefers the {label} CCD."
+        )
 
     def _update_helper_status(self):
         if cpu_park.is_helper_current() and cpu_park.is_sudoers_installed():
-            self._helper_status.setText("✓ Helper installed — parking + nice -1 available")
+            self._helper_status.setText("✓ Helper installed — priority and X3D controls available")
             self._helper_status.setStyleSheet("color: #a6e3a1;")
         elif cpu_park.is_helper_installed() and cpu_park.is_sudoers_installed():
             self._helper_status.setText("⚠ Helper needs update — click 'Install / Update Helper'")
             self._helper_status.setStyleSheet("color: #f9e2af;")
         else:
             self._helper_status.setText(
-                "✗ Helper not installed — install it to enable CPU parking and nice -1"
+                "✗ Helper not installed — install it to enable priority and X3D controls"
             )
             self._helper_status.setStyleSheet("color: #f38ba8;")
 
     def refresh_helper_state(self):
         """Refresh the helper status after it changes on another tab."""
         self._update_helper_status()
+        self._refresh_x3d_mode()
 
     def _install_helper(self):
         password, ok = QInputDialog.getText(
@@ -211,18 +237,6 @@ class SettingsTab(QWidget):
             self.helper_changed.emit()
         QMessageBox.information(self, "Install Helper", msg)
 
-    def _reset_all(self):
-        ans = QMessageBox.question(
-            self, "Reset All Changes",
-            "This will:\n"
-            "  • Restore all per-process CPU affinities and priority changes\n"
-            "  • Disable Gaming Mode and unpark any parked CPUs\n\n"
-            "Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if ans == QMessageBox.StandardButton.Yes:
-            self.reset_requested.emit()
-
     def _load_config(self):
         default = self._config.get("cpu", {}).get("default_affinity") or ""
         self._default_affinity_cb.setChecked(bool(default))
@@ -233,14 +247,6 @@ class SettingsTab(QWidget):
         mon = self._config.get("monitor", {})
         self._rule_interval.setValue(mon.get("rule_enforce_interval_ms", 500))
         self._display_interval.setValue(mon.get("display_refresh_interval_ms", 2000))
-
-        self._system_theme_cb.setChecked(
-            self._config.get("ui", {}).get("use_system_theme", False)
-        )
-
-        opacity = self._config.get("ui", {}).get("opacity", 100)
-        self._opacity_slider.setValue(int(opacity))
-        self._opacity_label.setText(f"{int(opacity)}%")
 
         # Autostart: check if systemd user service is enabled
         try:
@@ -283,14 +289,6 @@ class SettingsTab(QWidget):
     def _apply_monitor(self):
         self._config.setdefault("monitor", {})["rule_enforce_interval_ms"] = self._rule_interval.value()
         self._config.setdefault("monitor", {})["display_refresh_interval_ms"] = self._display_interval.value()
-        self._config.setdefault("ui", {})["use_system_theme"] = self._system_theme_cb.isChecked()
-        self._config.setdefault("ui", {})["opacity"] = self._opacity_slider.value()
-        # Apply opacity to main window immediately
-        from PyQt6.QtWidgets import QApplication
-        for widget in QApplication.topLevelWidgets():
-            from PyQt6.QtWidgets import QMainWindow
-            if isinstance(widget, QMainWindow):
-                widget.setWindowOpacity(self._opacity_slider.value() / 100.0)
         self.settings_changed.emit(self._config)
         QMessageBox.information(self, "Monitor Settings", "Settings applied.")
 

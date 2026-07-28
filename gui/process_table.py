@@ -110,6 +110,8 @@ class ProcessTable(QTableWidget):
     rule_add_requested = pyqtSignal(object)  # emits Rule
     rule_remove_requested = pyqtSignal(list)  # rule IDs; does not reset live process
     rule_value_manually_changed = pyqtSignal(int)  # pid — stop its startup rule burst
+    probalance_exclude_requested = pyqtSignal(str)  # process name pattern
+    probalance_include_requested = pyqtSignal(str)  # process name to un-exempt
     available_users_changed = pyqtSignal(list)
 
     COLUMNS = [
@@ -152,6 +154,7 @@ class ProcessTable(QTableWidget):
         self._log_callback = log_callback
         self._snapshot: list[ProcessPolicyView] = []
         self._throttled_pids: set[int] = set()
+        self._probalance_exempt_patterns: list[str] = []
         self._sort_col = 4   # CPU%
         self._sort_asc = False
         self._filter_text: str = ""
@@ -242,6 +245,13 @@ class ProcessTable(QTableWidget):
 
     def update_throttled(self, throttled_pids: set[int]):
         self._throttled_pids = throttled_pids
+
+    def update_probalance_exemptions(self, patterns: list[str]):
+        self._probalance_exempt_patterns = list(patterns)
+
+    def _is_probalance_exempt(self, process_name: str) -> bool:
+        name = process_name.lower()
+        return any(pattern.lower() in name for pattern in self._probalance_exempt_patterns)
 
     def update_snapshot(
         self, snapshot: list[ProcessPolicyView | ProcessSnapshot | ProcessInfo]
@@ -561,6 +571,17 @@ class ProcessTable(QTableWidget):
         io_menu.addAction("Current…", lambda: self._do_set_ionice(proc))
         io_menu.addAction("Always…", lambda: self._do_add_ionice_rule(proc))
         menu.addSeparator()
+        if self._is_probalance_exempt(proc.observed.name):
+            menu.addAction(
+                f"Include '{proc.observed.name}' in ProBalance",
+                lambda: self._do_include_in_probalance(proc),
+            )
+        else:
+            menu.addAction(
+                f"Exclude '{proc.observed.name}' from ProBalance",
+                lambda: self._do_exclude_from_probalance(proc),
+            )
+        menu.addSeparator()
         menu.addAction(
             f"Add Rule for '{proc.observed.name}'...",
             lambda: self._do_add_rule(proc)
@@ -584,6 +605,18 @@ class ProcessTable(QTableWidget):
                 ),
             )
         menu.exec(self.viewport().mapToGlobal(pos))
+
+    def _do_exclude_from_probalance(self, proc: ProcessPolicyView):
+        """Request a persistent exemption for the selected process name."""
+        name = proc.observed.name.strip()
+        if name:
+            self.probalance_exclude_requested.emit(name)
+
+    def _do_include_in_probalance(self, proc: ProcessPolicyView):
+        """Request removal of exemptions matching the selected process."""
+        name = proc.observed.name.strip()
+        if name:
+            self.probalance_include_requested.emit(name)
 
     def _matching_rules(self, proc_name: str) -> list:
         if self._rule_engine is None:

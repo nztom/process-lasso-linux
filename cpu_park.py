@@ -1,4 +1,4 @@
-"""CPU core isolation by offlining non-preferred CPUs through Linux sysfs.
+"""CPU topology detection and AMD X3D scheduler preference controls.
 
 Works on:
   AMD X3D (Ryzen 7950X3D etc.)  — detects preferred CCD by L3 cache size
@@ -9,14 +9,6 @@ This is an independent, Linux-specific implementation. It is not Process
 Lasso's former Windows "Gaming Mode" (now Performance Mode), Windows Game
 Mode, or Feral GameMode/gamemoderun.
 
-Why offline CPUs instead of using sched_setaffinity:
-  Parking writes 0 to /sys/devices/system/cpu/cpuN/online. The kernel
-  physically removes those CPUs from the scheduler. Every process
-  (including the game) sees fewer CPUs from birth, so thread-pool sizing
-  is correct and there is no scheduling contention or frametime jitter.
-  sched_setaffinity forces existing threads to compete on fewer CPUs —
-  that's the source of frametime spikes.
-
 Requires root for sysfs writes. A tiny sudo-whitelisted helper is
 installed to /usr/local/bin/process-lasso-sysfs with a NOPASSWD sudoers
 rule, so no password prompt at runtime.
@@ -24,6 +16,7 @@ rule, so no password prompt at runtime.
 from __future__ import annotations
 
 import os
+import glob
 import subprocess
 import logging
 from dataclasses import dataclass, field
@@ -33,7 +26,7 @@ log = logging.getLogger(__name__)
 
 # Module-level topology cache: preserved across detect_topology() calls within
 # a session.  Once we have a good asymmetric result, we keep it even if a later
-# call occurs after Gaming Mode has parked one CCD (making sysfs unreadable).
+# call occurs while some CPUs are temporarily offline.
 _topo_cache: "CPUTopology | None" = None
 
 HELPER      = "/usr/local/bin/process-lasso-sysfs"
@@ -44,25 +37,19 @@ HELPER_CONTENT = """\
 # Process Lasso privileged sysfs helper — managed by process-lasso.
 set -euo pipefail
 case "$1" in
-    cpu-online)
-        [[ "$2" =~ ^[0-9]+$ ]] || exit 1
-        [[ "$3" =~ ^[01]$   ]] || exit 1
-        echo "$3" > "/sys/devices/system/cpu/cpu$2/online"
-        ;;
-    cpu-unpark-all)
-        offline=$(cat /sys/devices/system/cpu/offline 2>/dev/null || true)
-        [ -z "$offline" ] && exit 0
-        # Expand cpulist (e.g. "8-15,24-31") to individual numbers
-        for part in $(echo "$offline" | tr ',' ' '); do
-            if [[ "$part" == *-* ]]; then
-                lo=${part%-*}; hi=${part#*-}
-                for ((c=lo; c<=hi; c++)); do
-                    echo 1 > "/sys/devices/system/cpu/cpu${c}/online" 2>/dev/null || true
-                done
-            else
-                echo 1 > "/sys/devices/system/cpu/cpu${part}/online" 2>/dev/null || true
-            fi
+    x3d-mode)
+        # x3d-mode <cache|frequency> — change AMD's scheduler CCD ranking.
+        [[ "${2:-}" == "cache" || "${2:-}" == "frequency" ]] || exit 1
+        mode_file=""
+        # Discover whichever firmware device is bound to the kernel driver.
+        # The device name/instance is deliberately not supplied by the caller.
+        for candidate in /sys/bus/platform/drivers/amd_x3d_vcache/*/amd_x3d_mode; do
+            [[ -e "$candidate" ]] || continue
+            mode_file="$candidate"
+            break
         done
+        [[ -n "$mode_file" ]] || { echo "AMD X3D mode control not found" >&2; exit 1; }
+        echo "$2" > "$mode_file"
         ;;
     renice-pid)
         # renice-pid <nice_value> <pid>   (nice_value may be negative)
@@ -137,8 +124,7 @@ def get_smt_siblings_of(cpus: set[int]) -> set[int]:
 def detect_topology() -> CPUTopology:
     """Auto-detect CPU topology.  Tries AMD X3D first, then Intel hybrid.
 
-    Caches the last asymmetric result so topology is preserved even when Gaming
-    Mode has parked one CCD, making sysfs L3/freq files unreadable for those CPUs.
+    Caches the last asymmetric result so topology survives transient sysfs reads.
     """
     global _topo_cache
     topo = _detect_amd_x3d()
@@ -150,7 +136,7 @@ def detect_topology() -> CPUTopology:
         _topo_cache = topo
         return topo
     # If live detection returned UNIFORM but we have a cached asymmetric result
-    # from earlier in this session (before Gaming Mode parked cores), return it.
+    # from earlier in this session, return it.
     if _topo_cache is not None and _topo_cache.has_asymmetry:
         return _topo_cache
     # True uniform: all CPUs equally capable
@@ -166,13 +152,8 @@ def _detect_amd_x3d() -> CPUTopology:
     """Detect AMD X3D: preferred CCD has larger L3 (3D V-Cache).
     e.g. Ryzen 9 7950X3D: CCD0=96MB (preferred), CCD1=32MB.
 
-    When Gaming Mode is already active (CPUs parked), the offline CPUs' sysfs
-    L3 entries are unreadable.  In that case all readable CPUs show the same L3
-    (the online CCD).  We detect this by checking whether there are offline CPUs
-    — if so, the offline set IS the non-preferred CCD and we return accordingly.
     """
     present = _parse_cpulist_file("/sys/devices/system/cpu/present") or set(range(os.cpu_count() or 1))
-    offline = _parse_cpulist_file("/sys/devices/system/cpu/offline")
     l3: dict[int, int] = {}
     for cpu in sorted(present):
         path = f"/sys/devices/system/cpu/cpu{cpu}/cache/index3/size"
@@ -185,30 +166,14 @@ def _detect_amd_x3d() -> CPUTopology:
             else:
                 l3[cpu] = int(raw)
         except (OSError, ValueError):
-            pass  # offline CPU — sysfs entry gone
+            pass
 
     if not l3:
         return CPUTopology()
 
     sizes = set(l3.values())
     if len(sizes) <= 1:
-        # All readable (online) CPUs have the same L3.
-        # If there are offline CPUs, the other CCD is parked by Gaming Mode —
-        # infer: online CPUs = preferred, offline CPUs = non-preferred.
-        if offline and l3:
-            online_kb = next(iter(sizes))
-            online_set = set(l3.keys())
-            return CPUTopology(
-                kind=TopologyKind.AMD_X3D,
-                preferred=online_set,
-                non_preferred=offline,
-                description=(
-                    f"AMD X3D detected (other CCD currently parked). "
-                    f"Preferred (V-Cache, {online_kb//1024}MB L3): CPUs {_fmt(online_set)}. "
-                    f"Non-preferred (parked): CPUs {_fmt(offline)}."
-                ),
-            )
-        return CPUTopology()   # genuine uniform L3 — not X3D
+        return CPUTopology()
 
     max_kb = max(sizes)
     min_kb = min(sizes)
@@ -284,16 +249,6 @@ def _fmt(cpus: set[int]) -> str:
     return ",".join(ranges)
 
 
-# ── Online / offline state ──────────────────────────────────────────────────
-
-def get_online_cpus() -> set[int]:
-    return _parse_cpulist_file("/sys/devices/system/cpu/online")
-
-
-def get_offline_cpus() -> set[int]:
-    return _parse_cpulist_file("/sys/devices/system/cpu/offline")
-
-
 def _parse_cpulist_file(path: str) -> set[int]:
     try:
         raw = open(path).read().strip()
@@ -310,6 +265,11 @@ def _parse_cpulist_file(path: str) -> set[int]:
         return result
     except (OSError, ValueError):
         return set()
+
+
+def get_offline_cpus() -> set[int]:
+    """Return CPUs offline for any system-level reason."""
+    return _parse_cpulist_file("/sys/devices/system/cpu/offline")
 
 
 # ── Helper installation ─────────────────────────────────────────────────────
@@ -337,11 +297,12 @@ def is_sudoers_installed() -> bool:
 
 
 def is_helper_current() -> bool:
-    """True if the installed helper supports current batch renice."""
+    """True if the installed helper supports all current privileged actions."""
     if not is_helper_installed():
         return False
     try:
-        return "renice-pids)" in open(HELPER).read()
+        content = open(HELPER).read()
+        return "renice-pids)" in content and "x3d-mode)" in content
     except OSError:
         return False
 
@@ -404,8 +365,6 @@ def install_helper_as_root(username: str = "", password: str = "") -> tuple[bool
     return False, f"Install failed (rc={rc}): {out.strip()[-300:]}"
 
 
-# ── Park / Unpark ───────────────────────────────────────────────────────────
-
 def _run_helper(*args: str) -> tuple[bool, str]:
     if not is_helper_installed():
         return False, "Helper not installed. Run install first."
@@ -421,42 +380,45 @@ def _run_helper(*args: str) -> tuple[bool, str]:
         return False, str(e)
 
 
-def park_cpus(cpus: set[int], log_cb=None) -> bool:
-    """Take CPUs offline. Returns True if all succeeded."""
-    if not cpus:
-        return True
-    ok = True
-    for cpu in sorted(cpus):
-        # CPU 0 cannot be taken offline (bootstrap processor)
-        if cpu == 0:
-            if log_cb:
-                log_cb(f"[Park] Skipping CPU 0 (bootstrap processor, cannot offline)")
-            continue
-        success, msg = _run_helper("cpu-online", str(cpu), "0")
-        if success:
-            if log_cb:
-                log_cb(f"[Park] CPU {cpu} → offline")
-        else:
-            log.warning("park cpu%d failed: %s", cpu, msg)
-            if log_cb:
-                log_cb(f"[Park] CPU {cpu} FAILED: {msg}")
-            ok = False
-    return ok
+# ── AMD X3D scheduler preference ───────────────────────────────────────────
+
+def get_x3d_mode_path() -> str | None:
+    """Discover the mode control on a device bound to ``amd_x3d_vcache``.
+
+    The platform-device instance (for example ``AMDI0101:00``) is firmware
+    assigned, so never assume a particular instance name or direct device path.
+    """
+    driver = "/sys/bus/platform/drivers/amd_x3d_vcache"
+    paths = sorted(glob.glob(f"{driver}/*/amd_x3d_mode"))
+    return os.path.realpath(paths[0]) if paths else None
 
 
-def unpark_all(log_cb=None) -> bool:
-    """Bring all offline CPUs back online."""
-    offline = get_offline_cpus()
-    if not offline:
-        if log_cb:
-            log_cb("[Park] No offline CPUs to restore.")
-        return True
-    success, msg = _run_helper("cpu-unpark-all")
-    if success:
-        if log_cb:
-            log_cb(f"[Park] CPUs {sorted(offline)} restored online.")
-        return True
-    log.warning("unpark-all failed: %s", msg)
-    if log_cb:
-        log_cb(f"[Park] Unpark all FAILED: {msg}")
-    return False
+def has_dual_ccd_x3d_control(topology: CPUTopology | None = None) -> bool:
+    """True only for asymmetric AMD X3D topology with a bound mode control."""
+    topo = topology if topology is not None else detect_topology()
+    return (
+        topo.kind == TopologyKind.AMD_X3D
+        and topo.has_asymmetry
+        and get_x3d_mode_path() is not None
+    )
+
+
+def get_x3d_mode() -> str | None:
+    """Return ``cache`` or ``frequency``; None means unsupported/unreadable."""
+    path = get_x3d_mode_path()
+    if not path:
+        return None
+    try:
+        mode = open(path).read().strip()
+    except OSError:
+        return None
+    return mode if mode in {"cache", "frequency"} else None
+
+
+def set_x3d_mode(mode: str) -> tuple[bool, str]:
+    """Set AMD's scheduler CCD preference through the privileged helper."""
+    if mode not in {"cache", "frequency"}:
+        return False, f"Invalid AMD X3D mode: {mode}"
+    if not get_x3d_mode_path():
+        return False, "AMD X3D mode control is not available on this system."
+    return _run_helper("x3d-mode", mode)

@@ -616,6 +616,29 @@ class ProcessTableTests(unittest.TestCase):
 
         self.assertEqual(table._matching_rules("game.exe"), [matching])
 
+    def test_exclude_from_probalance_emits_process_name(self):
+        engine = RuleEngine()
+        table = ProcessTable(engine, None)
+        spy = QSignalSpy(table.probalance_exclude_requested)
+
+        table._do_exclude_from_probalance(
+            self._view(engine, self._process(42, "game.exe", "user"))
+        )
+
+        self.assertEqual(spy[0][0], "game.exe")
+
+    def test_include_in_probalance_emits_process_name(self):
+        engine = RuleEngine()
+        table = ProcessTable(engine, None)
+        table.update_probalance_exemptions(["game"])
+        spy = QSignalSpy(table.probalance_include_requested)
+        view = self._view(engine, self._process(42, "game.exe", "user"))
+
+        self.assertTrue(table._is_probalance_exempt("game.exe"))
+        table._do_include_in_probalance(view)
+
+        self.assertEqual(spy[0][0], "game.exe")
+
 
 if __name__ == "__main__":
     unittest.main()

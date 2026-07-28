@@ -197,14 +197,9 @@ class MonitorThread(QThread):
         self._manually_overridden_pids: set[int] = set()
         self._process_cache: dict[int, ProcessInfo] = {}
 
-        # Track original affinity before we change it, for "Reset All" function.
+        # Track original affinity before we change it for internal restoration.
         # pid → frozenset of CPU numbers that were online when we first touched the process.
         self._original_affinities: dict[int, frozenset] = {}
-
-        # Gaming Mode nice -1 tracking: pid → original nice value before we elevated it
-        self._gaming_mode: bool = False
-        self._gaming_mode_elevate_nice: bool = False
-        self._gaming_niced: dict[int, int] = {}  # pid → original nice
 
         self._runtime_cleanup = ProcessRuntimeCleanup(
             rule_engine,
@@ -246,26 +241,6 @@ class MonitorThread(QThread):
             except OSError:
                 pass
 
-    def set_gaming_mode(self, active: bool, elevate_nice: bool):
-        """Called from GUI thread when Gaming Mode is toggled.
-        If deactivating, restores nice values for all processes we elevated."""
-        self._gaming_mode = active
-        self._gaming_mode_elevate_nice = elevate_nice
-        if not active and self._gaming_niced:
-            self._restore_gaming_nices()
-
-    def _restore_gaming_nices(self):
-        """Restore nice values to original for all game processes we elevated."""
-        count = 0
-        for pid, orig_nice in list(self._gaming_niced.items()):
-            try:
-                if utils.set_nice(pid, orig_nice):
-                    count += 1
-            except Exception:
-                pass
-        self._gaming_niced.clear()
-        self._emit_log(f"[Gaming Mode] Restored nice for {count} processes.")
-
     def set_manual_rule_override(self, pid: int):
         """Stop the startup burst after a manual affinity or nice change."""
         self._manually_overridden_pids.add(pid)
@@ -277,7 +252,7 @@ class MonitorThread(QThread):
 
     def reset_all_affinities(self):
         """Restore every process we touched back to its original affinity.
-        Called by the GUI 'Reset All Changes' button.
+        Available for controlled shutdown or future administrative workflows.
         Processes that have since exited are silently skipped."""
         online = utils.get_cpu_count()
         all_cpus = set(range(online))
@@ -312,7 +287,6 @@ class MonitorThread(QThread):
         """Clear Monitor-owned state for one ended process identity."""
         self._process_cache.pop(pid, None)
         self._original_affinities.pop(pid, None)
-        self._gaming_niced.pop(pid, None)
         self._known_tids_by_pid.pop(pid, None)
         self._manually_overridden_pids.discard(pid)
 
@@ -349,12 +323,6 @@ class MonitorThread(QThread):
         matched = self._rule_engine.matches_process(name)
         if matched:
             self._rule_engine.apply_to_process(pid, name)
-            # Rule matched — if gaming mode + elevate_nice, apply nice -1
-            if self._gaming_mode and self._gaming_mode_elevate_nice and pid not in self._gaming_niced:
-                orig_nice = info.get("nice", 0)
-                if utils.set_nice(pid, -1):
-                    self._gaming_niced[pid] = orig_nice
-                    self._emit_log(f"[Gaming Mode] nice -1 → {name}({pid})")
         else:
             default = self._default_affinity()
             if default:
@@ -495,7 +463,7 @@ class MonitorThread(QThread):
                 try:
                     raw = psutil.cpu_percent(percpu=True)
                     # psutil returns only ONLINE CPUs in cpu-number order.
-                    # When Gaming Mode parks a CCD the list is shorter and
+                    # When CPUs are offline the list is shorter and
                     # the indices no longer match CPU numbers.
                     # Build a full-length list indexed by actual CPU number.
                     online = sorted(utils.get_online_cpus())

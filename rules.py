@@ -304,7 +304,7 @@ class RuleEngine:
             return []
         desired = utils.cpulist_to_online_set(rule.affinity)
         if not desired:
-            # A rule containing only parked CPUs is temporarily inapplicable,
+            # A rule containing only offline CPUs is temporarily inapplicable,
             # not drifting. It will be retried after those CPUs return.
             return []
         effective_affinity = utils._cpuset_to_cpulist(desired)

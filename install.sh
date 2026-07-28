@@ -144,9 +144,9 @@ if topo.has_asymmetry:
     npref_str = cpu_park._fmt(topo.non_preferred)
     print(f'  Preferred CPUs  (game):  {pref_str}')
     print(f'  Non-preferred   (background): {npref_str}')
-    print('Gaming Mode (CPU parking) will be available.')
+    print('Asymmetric CPU topology controls will be available in Settings.')
 else:
-    print('Uniform CPU topology — Gaming Mode parking not applicable.')
+    print('Uniform CPU topology detected.')
 "
 
 info "Installing privileged sysfs helper (requires root)..."
@@ -161,8 +161,8 @@ print(msg)
 if ok:
     print('Helper installed. sudo NOPASSWD rule created.')
 else:
-    print('WARNING: Helper install failed. Gaming Mode (CPU parking) will not work.')
-    print('You can retry from the Gaming Mode tab in the app.')
+    print('WARNING: Helper install failed. Privileged CPU controls will not work.')
+    print('You can retry from the Settings tab in the app.')
 "
 
 # ── Done ───────────────────────────────────────────────────────────────────
@@ -173,10 +173,8 @@ echo "  Start now:      process-lasso"
 echo "  Start service:  systemctl --user start process-lasso.service"
 echo "  Uninstall:      bash $INSTALL_DIR/install.sh --uninstall"
 echo
-echo "Quick start for asymmetric CPUs (AMD X3D / Intel Hybrid):"
-echo "  Gaming Mode tab → click 'Enable Gaming Mode'"
-echo "  This parks non-preferred CPUs before launching your game"
-echo "  (a Process Lasso for Linux feature; not Feral GameMode/gamemoderun)"
+echo "Asymmetric CPU controls (AMD X3D / Intel Hybrid):"
+echo "  Settings → detected topology and AMD X3D preferred CCD"
 echo
 echo "Optional — background process isolation:"
 echo "  Settings tab → Default CPU Affinity: non-preferred cpulist"

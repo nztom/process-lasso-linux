@@ -111,6 +111,23 @@ class ProBalanceTab(QWidget):
         for item in self._exempt_list.selectedItems():
             self._exempt_list.takeItem(self._exempt_list.row(item))
 
+    def add_exemption(self, pattern: str):
+        """Reflect an exemption added from another part of the UI."""
+        normalized = pattern.strip()
+        existing = {
+            self._exempt_list.item(i).text().lower()
+            for i in range(self._exempt_list.count())
+        }
+        if normalized and normalized.lower() not in existing:
+            self._exempt_list.addItem(normalized)
+
+    def remove_exemptions(self, patterns: list[str]):
+        """Remove exemption patterns changed from another part of the UI."""
+        targets = {pattern.lower() for pattern in patterns}
+        for row in range(self._exempt_list.count() - 1, -1, -1):
+            if self._exempt_list.item(row).text().lower() in targets:
+                self._exempt_list.takeItem(row)
+
     def _apply(self):
         cfg = self.get_config()
         self.settings_changed.emit(cfg)

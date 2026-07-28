@@ -209,7 +209,7 @@ class RuleAttemptTests(unittest.TestCase):
 
     @mock.patch("rules.utils.get_online_cpus", return_value={0, 1})
     @mock.patch("rules.utils.set_thread_affinity", return_value=True)
-    def test_parked_rule_cpus_do_not_count_as_affinity_drift(
+    def test_offline_rule_cpus_do_not_count_as_affinity_drift(
         self, set_affinity, _online
     ):
         self.rule.affinity = "0-3"
@@ -223,7 +223,7 @@ class RuleAttemptTests(unittest.TestCase):
 
     @mock.patch("rules.utils.get_online_cpus", return_value={0, 1})
     @mock.patch("rules.utils.set_thread_affinity", return_value=True)
-    def test_rule_with_only_parked_cpus_waits_without_drift_attempts(
+    def test_rule_with_only_offline_cpus_waits_without_drift_attempts(
         self, set_affinity, _online
     ):
         self.rule.affinity = "2-3"

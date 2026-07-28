@@ -202,7 +202,7 @@ def set_ionice(pid: int, ionice_class: int, ionice_level: int | None = None) -> 
 
 
 def get_online_cpus() -> set[int]:
-    """Return the set of currently online (non-parked) CPU numbers."""
+    """Return the set of currently online CPU numbers."""
     try:
         text = open("/sys/devices/system/cpu/online").read().strip()
         return cpulist_to_set(text)
@@ -211,11 +211,10 @@ def get_online_cpus() -> set[int]:
 
 
 def get_cpu_count() -> int:
-    """Return total number of logical CPUs, including any currently offline/parked ones.
+    """Return total number of logical CPUs, including any currently offline ones.
 
     Uses /sys/devices/system/cpu/present instead of os.cpu_count() because
-    os.cpu_count() only returns ONLINE CPUs — when Gaming Mode parks cores it
-    returns 16 instead of 32, which breaks the affinity dialog and validation."""
+    os.cpu_count() may omit offline CPUs, which breaks affinity validation."""
     try:
         text = open("/sys/devices/system/cpu/present").read().strip()
         cpus = cpulist_to_set(text)

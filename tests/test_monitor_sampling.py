@@ -19,38 +19,6 @@ from rules import Rule, RuleEngine
 
 
 class MonitorSamplingTests(unittest.TestCase):
-    @mock.patch("monitor.utils.set_nice", return_value=True)
-    def test_gaming_mode_restore_uses_shared_process_nice_helper(self, set_nice):
-        monitor = MonitorThread(RuleEngine(), ProBalance({}), {})
-        monitor._gaming_niced = {101: 0, 202: 5}
-
-        monitor._restore_gaming_nices()
-
-        self.assertEqual(
-            set_nice.call_args_list,
-            [mock.call(101, 0), mock.call(202, 5)],
-        )
-        self.assertEqual(monitor._gaming_niced, {})
-
-    @mock.patch("monitor.os.sched_getaffinity", return_value={0, 1})
-    @mock.patch("monitor.utils.get_process_tids", return_value=[101])
-    @mock.patch("monitor.utils.set_nice", return_value=True)
-    def test_gaming_mode_elevation_uses_shared_process_nice_helper(
-        self, set_nice, _get_tids, _get_affinity
-    ):
-        engine = RuleEngine()
-        monitor = MonitorThread(engine, ProBalance({}), {})
-        monitor._gaming_mode = True
-        monitor._gaming_mode_elevate_nice = True
-        info = {"pid": 101, "name": "game.exe", "nice": 5}
-
-        with mock.patch.object(engine, "matches_process", return_value=True), \
-             mock.patch.object(engine, "apply_to_process"):
-            monitor._apply_new_pid(info)
-
-        set_nice.assert_called_once_with(101, -1)
-        self.assertEqual(monitor._gaming_niced, {101: 5})
-
     def test_identity_and_metrics_are_collected_separately(self):
         proc = psutil.Process(os.getpid())
 
@@ -133,7 +101,6 @@ class MonitorSamplingTests(unittest.TestCase):
             7: {"pid": 7, "comm": "game", "create_time": 1.0}
         }
         monitor._original_affinities[7] = frozenset({0})
-        monitor._gaming_niced[7] = 0
         monitor._known_tids_by_pid[7] = {7, 8}
         monitor._manually_overridden_pids.add(7)
 
@@ -142,7 +109,6 @@ class MonitorSamplingTests(unittest.TestCase):
         self.assertEqual(monitor._known_pids, set())
         self.assertNotIn(7, monitor._process_cache)
         self.assertNotIn(7, monitor._original_affinities)
-        self.assertNotIn(7, monitor._gaming_niced)
         self.assertNotIn(7, monitor._known_tids_by_pid)
         self.assertNotIn(7, monitor._manually_overridden_pids)
         self.assertFalse(any(key.pid == 7 for key in probalance._states))
@@ -186,7 +152,6 @@ class MonitorSamplingTests(unittest.TestCase):
             7: {"pid": 7, "comm": "game", "create_time": 1.0}
         }
         monitor._original_affinities[7] = frozenset({0})
-        monitor._gaming_niced[7] = 0
         monitor._known_tids_by_pid[7] = {7, 8}
         monitor._manually_overridden_pids.add(7)
         probalance._states[ProcessIdentity(7, 1.0)] = mock.Mock()
@@ -204,7 +169,6 @@ class MonitorSamplingTests(unittest.TestCase):
 
         self.assertIs(monitor._process_cache[7], replacement)
         self.assertNotIn(7, monitor._original_affinities)
-        self.assertNotIn(7, monitor._gaming_niced)
         self.assertNotIn(7, monitor._known_tids_by_pid)
         self.assertNotIn(7, monitor._manually_overridden_pids)
         self.assertFalse(any(key.pid == 7 for key in probalance._states))

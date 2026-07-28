@@ -115,7 +115,7 @@ class CpuBarsWidget(QWidget):
 
     Automatically lays bars out in rows to fit the available width.
     Each bar shows: CPU index label | filled portion | % text.
-    Parked (offline) CPUs are shown greyed out.
+    Offline CPUs are shown greyed out.
     Hover shows tooltip with CPU index and temperature.
     """
 
@@ -222,7 +222,7 @@ class CpuBarsWidget(QWidget):
                 offline = idx in self._offline
                 temp = self._temps.get(idx)
                 if offline:
-                    tip = f"CPU {idx}: offline (parked)"
+                    tip = f"CPU {idx}: offline"
                 else:
                     tip = f"CPU {idx}: {pct:.1f}%"
                     freq = self._freqs.get(idx)

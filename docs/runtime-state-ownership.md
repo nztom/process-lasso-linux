@@ -10,8 +10,7 @@ each owner; it does not take ownership of subsystem internals.
 | `_known_pids` | Monitor | PID | One scan's set of observed processes | Replaced after each process scan; removed identities are coordinated before replacement |
 | `_known_tids_by_pid` | Monitor | PID to TID set | Current process identity and its last observed threads | Process exit or PID reuse; individual exited TIDs disappear on the next thread sync |
 | `_manually_overridden_pids` | Monitor | PID | Current process identity | Process exit or PID reuse |
-| `_original_affinities` | Monitor | PID | Current process identity, until Reset All clears all entries | Process exit, PID reuse, or Reset All |
-| `_gaming_niced` | Monitor | PID | Current process identity while Gaming Mode owns its nice adjustment | Process exit, PID reuse, or Gaming Mode restoration |
+| `_original_affinities` | Monitor | PID | Current process identity, until restoration clears all entries | Process exit, PID reuse, or explicit restoration |
 | `_process_cache` | Monitor | PID | Current process identity | Process exit or PID reuse; metrics mutate only in the worker thread |
 | `_attempts_by_rule` | RuleEngine | Rule ID to PID counter | Current rule and process identity | Process exit/PID reuse, rule edit/removal, or rule reload |
 | `_suppressed_rule_pids` | RuleEngine | `(rule_id, PID)` | Current rule and process identity | Process exit/PID reuse, rule edit/removal, or rule reload |

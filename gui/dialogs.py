@@ -67,9 +67,9 @@ class AffinityDialog(QDialog):
 
             from cpu_park import TopologyKind
             if topo and topo.kind == TopologyKind.AMD_X3D:
-                ccd0_name, ccd1_name = "CCD0 (V-Cache — preferred)", "CCD1 (parked in Gaming Mode)"
+                ccd0_name, ccd1_name = "CCD0 (V-Cache — preferred)", "CCD1 (frequency optimized)"
             else:
-                ccd0_name, ccd1_name = "Preferred CCD", "Non-preferred CCD (parked in Gaming Mode)"
+                ccd0_name, ccd1_name = "Preferred CPUs", "Non-preferred CPUs"
 
             row = [0]
 
@@ -86,7 +86,7 @@ class AffinityDialog(QDialog):
                     cb.setChecked(cpu in selected)
                     if cpu in offline:
                         cb.setEnabled(False)
-                        cb.setToolTip(f"CPU {cpu} is parked — disable Gaming Mode to use it")
+                        cb.setToolTip(f"CPU {cpu} is currently offline")
                     grid.addWidget(cb, row[0], col)
                     cb_map[cpu] = cb
                 row[0] += 1
@@ -108,7 +108,7 @@ class AffinityDialog(QDialog):
                 cb.setChecked(i in selected)
                 if i in offline:
                     cb.setEnabled(False)
-                    cb.setToolTip(f"CPU {i} is currently parked")
+                    cb.setToolTip(f"CPU {i} is currently offline")
                 r, c = divmod(i, cols)
                 grid.addWidget(cb, r, c)
                 cb_map[i] = cb
@@ -118,7 +118,7 @@ class AffinityDialog(QDialog):
 
         if offline:
             offline_str = utils._cpuset_to_cpulist(offline)
-            note = QLabel(f"⚠  CPUs {offline_str} are parked (Gaming Mode active) — unpark to select them.")
+            note = QLabel(f"⚠  CPUs {offline_str} are currently offline and cannot be selected.")
             note.setStyleSheet("color: rgba(249,226,175,0.85); font-size: 11px;")
             note.setWordWrap(True)
             layout.addWidget(note)
