@@ -307,7 +307,6 @@ class RuleEngine:
             # A rule containing only offline CPUs is temporarily inapplicable,
             # not drifting. It will be retried after those CPUs return.
             return []
-        effective_affinity = utils._cpuset_to_cpulist(desired)
         actions = []
         for tid in tids if tids is not None else utils.get_process_tids(pid):
             try:
@@ -319,7 +318,10 @@ class RuleEngine:
                 continue
             first_seen = identity not in self._affinity_seen
             self._affinity_seen.add(identity)
-            if current == desired:
+            # Treat the rule as an allowed boundary. Applications may use a
+            # narrower mask for individual threads (for example, pinning a
+            # critical game thread to one CPU) without violating the rule.
+            if current and current <= desired:
                 continue
             attempts = self._affinity_drift_attempts.get(identity, 0)
             if not first_seen and not rule.force_apply and attempts >= RULE_APPLY_ATTEMPTS:
@@ -332,6 +334,12 @@ class RuleEngine:
                 continue
             if not first_seen:
                 self._affinity_drift_attempts[identity] = attempts + 1
+            constrained = current & desired
+            if not constrained:
+                # No permitted CPU remains, so use the complete rule mask to
+                # keep the thread runnable inside the configured boundary.
+                constrained = desired
+            effective_affinity = utils._cpuset_to_cpulist(constrained)
             if not utils.set_thread_affinity(tid, effective_affinity):
                 continue
             kind = "initial affinity" if first_seen else "affinity drift"
@@ -339,7 +347,7 @@ class RuleEngine:
                 f" (correction {attempts + 1}/{RULE_APPLY_ATTEMPTS})"
             )
             msg = (
-                f"[Rule:{rule.name}] Corrected {kind}={rule.affinity} on "
+                f"[Rule:{rule.name}] Corrected {kind}={effective_affinity} on "
                 f"{proc_name}({tid}){attempt}"
             )
             self._log(msg)

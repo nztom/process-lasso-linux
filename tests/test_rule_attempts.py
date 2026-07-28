@@ -207,6 +207,46 @@ class RuleAttemptTests(unittest.TestCase):
 
         set_affinity.assert_not_called()
 
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_narrower_application_affinity_inside_rule_is_preserved(self, set_affinity):
+        with mock.patch("rules.os.sched_getaffinity", return_value={0}):
+            for _ in range(20):
+                self.engine.apply_to_process(100, "game.exe")
+
+        set_affinity.assert_not_called()
+        self.assertEqual(self.engine._affinity_drift_attempts, {})
+
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_partly_outside_affinity_is_intersected_with_rule(self, set_affinity):
+        with mock.patch("rules.os.sched_getaffinity", return_value={2, 8}):
+            self.engine.apply_to_process(100, "game.exe")
+
+        set_affinity.assert_called_once_with(100, "2")
+
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_disjoint_affinity_falls_back_to_complete_rule_mask(self, set_affinity):
+        with mock.patch("rules.os.sched_getaffinity", return_value={8}):
+            self.engine.apply_to_process(100, "game.exe")
+
+        set_affinity.assert_called_once_with(100, "0-3")
+
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_forced_rule_preserves_narrower_compliant_affinity(self, set_affinity):
+        self.rule.force_apply = True
+        with mock.patch("rules.os.sched_getaffinity", return_value={1}):
+            for _ in range(20):
+                self.engine.apply_to_process(100, "game.exe")
+
+        set_affinity.assert_not_called()
+
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_forced_rule_intersects_partly_outside_affinity(self, set_affinity):
+        self.rule.force_apply = True
+        with mock.patch("rules.os.sched_getaffinity", return_value={2, 8}):
+            self.engine.apply_to_process(100, "game.exe")
+
+        set_affinity.assert_called_once_with(100, "2")
+
     @mock.patch("rules.utils.get_online_cpus", return_value={0, 1})
     @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_offline_rule_cpus_do_not_count_as_affinity_drift(
