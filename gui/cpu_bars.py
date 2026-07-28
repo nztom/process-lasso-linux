@@ -134,8 +134,8 @@ class CpuBarsWidget(QWidget):
         self._cpu_pcts = list(percpu)
         # Refresh offline set from sysfs (fast — just reads a small file)
         try:
-            import cpu_park
-            self._offline = cpu_park.get_offline_cpus()
+            import cpu_tools
+            self._offline = cpu_tools.get_cpu_info().offline
         except Exception:
             self._offline = set()
         # Read temperatures and frequencies

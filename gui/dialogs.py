@@ -22,7 +22,9 @@ class AffinityDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"Set CPU Affinity{' — ' + title_suffix if title_suffix else ''}")
         # Always use total CPU count (present), not just online count
-        self._cpu_count = utils.get_cpu_count()
+        import cpu_tools
+        self._cpu_info = cpu_tools.get_cpu_info()
+        self._cpu_count = self._cpu_info.cpu_count
         self._checkboxes: list[QCheckBox] = []
         self._build_ui(current_affinity)
         self.setMinimumWidth(520)
@@ -34,10 +36,10 @@ class AffinityDialog(QDialog):
 
         # Gather topology info for CCD-aware display
         try:
-            import cpu_park
-            offline = cpu_park.get_offline_cpus()
-            topo = cpu_park.detect_topology()
-            smt_siblings = cpu_park.get_smt_siblings_of(set(range(self._cpu_count)))
+            import cpu_tools
+            offline = self._cpu_info.offline
+            topo = self._cpu_info.topology
+            smt_siblings = self._cpu_info.smt_siblings
         except Exception:
             offline = set()
             topo = None
@@ -65,8 +67,7 @@ class AffinityDialog(QDialog):
             npref_phys = sorted(c for c in non_pref  if c not in smt_siblings)
             npref_ht   = sorted(c for c in non_pref  if c in smt_siblings)
 
-            from cpu_park import TopologyKind
-            if topo and topo.kind == TopologyKind.AMD_X3D:
+            if self._cpu_info.features.amd_x3d:
                 ccd0_name, ccd1_name = "CCD0 (V-Cache — preferred)", "CCD1 (frequency optimized)"
             else:
                 ccd0_name, ccd1_name = "Preferred CPUs", "Non-preferred CPUs"
@@ -134,8 +135,7 @@ class AffinityDialog(QDialog):
         btn_row.addWidget(none_btn)
 
         if preferred and non_pref:
-            from cpu_park import TopologyKind
-            if topo and topo.kind == TopologyKind.AMD_X3D:
+            if self._cpu_info.features.amd_x3d:
                 ccd0_label, ccd1_label = "CCD0 (V-Cache)", "CCD1"
             else:
                 ccd0_label, ccd1_label = "Preferred CCD", "Non-preferred CCD"

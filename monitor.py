@@ -495,8 +495,10 @@ class MonitorThread(QThread):
                     # When CPUs are offline the list is shorter and
                     # the indices no longer match CPU numbers.
                     # Build a full-length list indexed by actual CPU number.
-                    online = sorted(utils.get_online_cpus())
-                    total  = utils.get_cpu_count()
+                    import cpu_tools
+                    cpu_info = cpu_tools.get_cpu_info()
+                    online = sorted(cpu_info.online)
+                    total = cpu_info.cpu_count
                     full   = [0.0] * total
                     for idx, cpu_num in enumerate(online):
                         if idx < len(raw) and cpu_num < total:

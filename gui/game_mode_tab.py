@@ -1,13 +1,14 @@
 """Thin Qt editor/view over the shared Game Mode configuration model."""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QComboBox, QLineEdit, QTableWidget,
     QTableWidgetItem, QLabel, QPushButton, QHBoxLayout, QDialog,
     QDialogButtonBox, QMessageBox, QAbstractItemView,
 )
 from gui.dialogs import AffinityDialog, NicePriorityDialog
+import cpu_tools
 
 
 class RunningGameProfileDialog(QDialog):
@@ -162,15 +163,33 @@ class GameModeTab(QWidget):
         super().__init__(parent)
         self._config = game_config
         self._sessions = sessions
+        self._known_session_tokens: set[str] = set()
+        self._session_flash_generation = 0
+        self._session_flash_pending = False
         layout = QVBoxLayout(self)
+        self._mode_indicator = QLabel()
+        self._mode_indicator.setObjectName("gameModeIndicator")
+        layout.addWidget(self._mode_indicator)
         layout.addWidget(QLabel(
-            "Usage: process-lasso-game %command%"
+            "Usage: processlasso-game %command%"
         ))
         form = QFormLayout()
         self._ccd = QComboBox()
-        self._ccd.addItem("V-Cache", "cache")
-        self._ccd.addItem("Frequency", "frequency")
-        self._ccd.setCurrentIndex(max(0, self._ccd.findData(game_config.get("ccd_preference", "cache"))))
+        self._ccd.addItem("Disabled", None)
+        configured_mode = game_config.get("ccd_preference", "cache")
+        for mode in cpu_tools.get_available_x3d_modes():
+            label = (
+                f"{mode.value} (recommended)"
+                if mode.value == "cache" else mode.value
+            )
+            self._ccd.addItem(label, mode.value)
+        configured_index = self._ccd.findData(configured_mode)
+        if configured_index >= 0:
+            self._ccd.setCurrentIndex(configured_index)
+        x3d_enabled = cpu_tools.get_cpu_info().features.x3d_mode_control
+        self._ccd.setEnabled(x3d_enabled and self._ccd.count() > 0)
+        if not x3d_enabled or not self._ccd.count():
+            self._ccd.setPlaceholderText("Not supported by this CPU")
         self._affinity = QLineEdit(game_config.get("affinity") or "")
         self._affinity.setReadOnly(True)
         self._affinity.setPlaceholderText("Disabled (example: 0-7,16-23)")
@@ -222,7 +241,8 @@ class GameModeTab(QWidget):
         row.addWidget(merge)
         row.addStretch()
         layout.addLayout(row)
-        layout.addWidget(QLabel("Games currently running with Game Mode"))
+        self._active_heading = QLabel("Games currently running with Game Mode")
+        layout.addWidget(self._active_heading)
         self._active = QTableWidget(0, 5)
         self._active.setHorizontalHeaderLabels(
             ["Game", "Root PID", "Affinity", "Nice", "Command"]
@@ -315,6 +335,24 @@ class GameModeTab(QWidget):
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self._games.setItem(row, column, item)
         sessions = list(self._sessions.sessions.values())
+        session_tokens = {session["token"] for session in sessions}
+        if session_tokens - self._known_session_tokens:
+            self._queue_or_flash_new_game_session()
+        self._known_session_tokens = session_tokens
+        if sessions:
+            count = len(sessions)
+            suffix = "session" if count == 1 else "sessions"
+            self._mode_indicator.setText(
+                f"● Game Mode enabled — {count} active {suffix}"
+            )
+            self._mode_indicator.setStyleSheet(
+                "color: #22ff66; font-weight: 800; padding: 4px 0;"
+            )
+        else:
+            self._mode_indicator.setText("○ Game Mode inactive")
+            self._mode_indicator.setStyleSheet(
+                "color: rgba(205,214,244,0.65); font-weight: 600; padding: 4px 0;"
+            )
         self._active.setRowCount(len(sessions))
         for row, session in enumerate(sessions):
             policy = session.get("policy", {})
@@ -329,6 +367,52 @@ class GameModeTab(QWidget):
             if selected_token == session["token"]:
                 self._active.selectRow(row)
         self._create_running_profile.setEnabled(bool(sessions))
+
+    def _can_show_session_flash(self):
+        window = self.window()
+        return (
+            self.isVisible()
+            and window.isVisible()
+            and not window.isMinimized()
+        )
+
+    def _queue_or_flash_new_game_session(self):
+        if self._can_show_session_flash():
+            self._session_flash_pending = False
+            self._flash_new_game_session()
+        else:
+            self._session_flash_pending = True
+
+    def _consume_pending_session_flash(self):
+        if self._session_flash_pending and self._can_show_session_flash():
+            self._session_flash_pending = False
+            self._flash_new_game_session()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Run after Qt finishes making the tab/window visible.
+        QTimer.singleShot(0, self._consume_pending_session_flash)
+
+    def _flash_new_game_session(self):
+        """Briefly highlight the active-session area for each new session."""
+        self._session_flash_generation += 1
+        generation = self._session_flash_generation
+        self._active_heading.setStyleSheet(
+            "color: #22ff66; font-weight: 800; "
+            "background: rgba(34,255,102,0.18); padding: 5px;"
+        )
+        self._active.setStyleSheet(
+            "QTableWidget { border: 2px solid #22ff66; "
+            "background: rgba(34,255,102,0.08); }"
+        )
+
+        def clear_flash():
+            if generation != self._session_flash_generation:
+                return
+            self._active_heading.setStyleSheet("")
+            self._active.setStyleSheet("")
+
+        QTimer.singleShot(1200, clear_flash)
 
     def _profile_for_running_game(self):
         row = self._active.currentRow()

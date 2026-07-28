@@ -14,7 +14,7 @@ import subprocess
 
 import utils
 import app_identity
-import cpu_park
+import cpu_tools
 from gui.dialogs import AffinityDialog
 
 
@@ -25,7 +25,8 @@ class SettingsTab(QWidget):
     def __init__(self, config: dict, parent=None):
         super().__init__(parent)
         self._config = config
-        self._topology = cpu_park.detect_topology()
+        self._cpu_info = cpu_tools.get_cpu_info()
+        self._topology = self._cpu_info.topology
         self._x3d_supported = False
         self._build_ui()
 
@@ -87,21 +88,29 @@ class SettingsTab(QWidget):
         )
         x3d_desc.setWordWrap(True)
         x3d_layout.addWidget(x3d_desc)
-
         x3d_row = QHBoxLayout()
         x3d_row.addWidget(QLabel("Prefer:"))
         self._x3d_mode_combo = QComboBox()
-        self._x3d_mode_combo.addItem("V-Cache CCD (cache-sensitive / games)", "cache")
-        self._x3d_mode_combo.addItem("Frequency CCD (higher clocks / compute)", "frequency")
+        for mode in cpu_tools.get_available_x3d_modes(self._cpu_info):
+            label = (
+                f"{mode.value} (recommended)"
+                if mode.value == "frequency" else mode.value
+            )
+            self._x3d_mode_combo.addItem(label, mode.value)
+        recommended_index = self._x3d_mode_combo.findData("frequency")
+        if recommended_index >= 0:
+            self._x3d_mode_combo.setCurrentIndex(recommended_index)
         x3d_row.addWidget(self._x3d_mode_combo)
         self._x3d_apply_btn = QPushButton("Apply")
         self._x3d_apply_btn.clicked.connect(self._apply_x3d_mode)
         x3d_row.addWidget(self._x3d_apply_btn)
         self._x3d_status = QLabel()
+        self._x3d_status.setWordWrap(True)
         x3d_row.addWidget(self._x3d_status)
         x3d_row.addStretch()
         x3d_layout.addLayout(x3d_row)
         self._x3d_group.setVisible(False)
+        self._x3d_group.setEnabled(False)
         layout.addWidget(self._x3d_group)
 
         # ── Monitor intervals ───────────────────────────────────────────────
@@ -132,7 +141,7 @@ class SettingsTab(QWidget):
         self._autostart_cb = QCheckBox("Start Process Lasso automatically with your desktop session")
         self._autostart_cb.setToolTip(
             "Installs / removes a systemd user service unit\n"
-            "(~/.config/systemd/user/process-lasso.service)"
+            "(~/.config/systemd/user/processlasso.service)"
         )
         auto_layout.addWidget(self._autostart_cb)
         autostart_apply_btn = QPushButton("Apply Autostart Setting")
@@ -168,41 +177,64 @@ class SettingsTab(QWidget):
         self._refresh_x3d_mode()
 
     def _refresh_x3d_mode(self):
-        self._x3d_supported = cpu_park.has_dual_ccd_x3d_control(self._topology)
+        self._cpu_info = cpu_tools.get_cpu_info()
+        self._topology = self._cpu_info.topology
+        self._x3d_supported = self._cpu_info.features.x3d_mode_control
         self._x3d_group.setVisible(self._x3d_supported)
+        self._x3d_group.setEnabled(self._x3d_supported)
         if not self._x3d_supported:
             return
 
-        mode = cpu_park.get_x3d_mode()
-        index = self._x3d_mode_combo.findData(mode)
-        if index >= 0:
-            self._x3d_mode_combo.setCurrentIndex(index)
-        label = "V-Cache CCD preferred" if mode == "cache" else "Frequency CCD preferred"
-        self._x3d_status.setText(f"Current: {label}")
+        self.refresh_current_x3d_mode()
 
-        helper_ready = cpu_park.is_helper_current() and cpu_park.is_sudoers_installed()
+        helper_ready = cpu_tools.is_helper_current() and cpu_tools.is_sudoers_installed()
         self._x3d_apply_btn.setEnabled(helper_ready)
         self._x3d_apply_btn.setToolTip(
             "" if helper_ready else "Install or update the privileged helper first."
         )
 
+    def refresh_current_x3d_mode(self, sync_selector=False):
+        """Refresh the live mode with only a lightweight sysfs read."""
+        if not self._x3d_supported:
+            return
+        mode = cpu_tools.get_x3d_mode()
+        index = self._x3d_mode_combo.findData(mode)
+        if sync_selector and index >= 0:
+            self._x3d_mode_combo.setCurrentIndex(index)
+        current_label = self._x3d_mode_label(mode)
+        configured_mode = self._config.get("game_mode", {}).get(
+            "ccd_preference", "cache"
+        )
+        configured_label = self._x3d_mode_label(configured_mode)
+        self._x3d_status.setText(
+            f"Current scheduler preference: {current_label}\n"
+            f"Configured Game Mode default: {configured_label}"
+        )
+
+    @staticmethod
+    def _x3d_mode_label(mode):
+        return mode if mode else "Unavailable"
+
+    def refresh_cpu_state(self):
+        """Refresh live CPU state and configuration-derived feature labels."""
+        self._refresh_x3d_mode()
+
     def _apply_x3d_mode(self):
         mode = self._x3d_mode_combo.currentData()
-        ok, message = cpu_park.set_x3d_mode(mode)
+        ok, message = cpu_tools.set_x3d_mode(mode)
         if not ok:
             QMessageBox.warning(self, "AMD X3D Preference", message)
             return
-        self._refresh_x3d_mode()
-        label = "V-Cache" if mode == "cache" else "Frequency"
+        self.refresh_current_x3d_mode(sync_selector=True)
         QMessageBox.information(
-            self, "AMD X3D Preference", f"Linux now prefers the {label} CCD."
+            self, "AMD X3D Preference", f"Linux scheduler mode is now {mode}."
         )
 
     def _update_helper_status(self):
-        if cpu_park.is_helper_current() and cpu_park.is_sudoers_installed():
+        if cpu_tools.is_helper_current() and cpu_tools.is_sudoers_installed():
             self._helper_status.setText("✓ Helper installed — priority and X3D controls available")
             self._helper_status.setStyleSheet("color: #a6e3a1;")
-        elif cpu_park.is_helper_installed() and cpu_park.is_sudoers_installed():
+        elif cpu_tools.is_helper_installed() and cpu_tools.is_sudoers_installed():
             self._helper_status.setText("⚠ Helper needs update — click 'Install / Update Helper'")
             self._helper_status.setStyleSheet("color: #f9e2af;")
         else:
@@ -224,7 +256,7 @@ class SettingsTab(QWidget):
         )
         if not ok or not password:
             return
-        ok, msg = cpu_park.install_helper_as_root(password=password)
+        ok, msg = cpu_tools.install_helper_as_root(password=password)
         self._update_helper_status()
         if ok:
             self.helper_changed.emit()
@@ -244,7 +276,7 @@ class SettingsTab(QWidget):
         # Autostart: check if systemd user service is enabled
         try:
             r = subprocess.run(
-                ["systemctl", "--user", "is-enabled", "process-lasso.service"],
+                ["systemctl", "--user", "is-enabled", "processlasso.service"],
                 capture_output=True, text=True
             )
             self._autostart_cb.setChecked(r.stdout.strip() == "enabled")
@@ -290,7 +322,8 @@ class SettingsTab(QWidget):
     def _apply_autostart(self):
         enable = self._autostart_cb.isChecked()
         service_dir = os.path.expanduser("~/.config/systemd/user")
-        service_file = os.path.join(service_dir, "process-lasso.service")
+        service_file = os.path.join(service_dir, "processlasso.service")
+        legacy_service_file = os.path.join(service_dir, "process-lasso.service")
         if enable:
             os.makedirs(service_dir, exist_ok=True)
             # Find the main.py location
@@ -311,13 +344,22 @@ class SettingsTab(QWidget):
             try:
                 with open(service_file, "w") as f:
                     f.write(unit)
-                subprocess.run(["systemctl", "--user", "enable", "process-lasso.service"], check=True)
+                subprocess.run(
+                    ["systemctl", "--user", "disable", "--now", "process-lasso.service"],
+                    check=False,
+                )
+                try:
+                    os.remove(legacy_service_file)
+                except FileNotFoundError:
+                    pass
+                subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+                subprocess.run(["systemctl", "--user", "enable", "processlasso.service"], check=True)
                 QMessageBox.information(self, "Autostart", "Autostart enabled.")
             except Exception as e:
                 QMessageBox.warning(self, "Autostart", f"Failed to enable: {e}")
         else:
             try:
-                subprocess.run(["systemctl", "--user", "disable", "process-lasso.service"], check=False)
+                subprocess.run(["systemctl", "--user", "disable", "processlasso.service"], check=False)
                 QMessageBox.information(self, "Autostart", "Autostart disabled.")
             except Exception as e:
                 QMessageBox.warning(self, "Autostart", f"Failed to disable: {e}")

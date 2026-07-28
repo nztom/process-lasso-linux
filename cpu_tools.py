@@ -1,4 +1,4 @@
-"""CPU topology detection and AMD X3D scheduler preference controls.
+"""Centralized CPU discovery, topology, capability, and control helpers.
 
 Works on:
   AMD X3D (Ryzen 7950X3D etc.)  — detects preferred CCD by L3 cache size
@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import os
 import glob
+import re
 import subprocess
 import logging
+import threading
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
@@ -28,9 +30,12 @@ log = logging.getLogger(__name__)
 # a session.  Once we have a good asymmetric result, we keep it even if a later
 # call occurs while some CPUs are temporarily offline.
 _topo_cache: "CPUTopology | None" = None
+_static_cpu_info_cache: "_StaticCPUInfo | None" = None
+_static_cpu_info_lock = threading.Lock()
 
 HELPER      = "/usr/local/bin/process-lasso-sysfs"
 SUDOERS_FILE = "/etc/sudoers.d/process-lasso"
+X3D_FALLBACK_MODES = ("cache", "frequency")
 
 HELPER_CONTENT = """\
 #!/bin/bash
@@ -38,8 +43,18 @@ HELPER_CONTENT = """\
 set -euo pipefail
 case "$1" in
     x3d-mode)
-        # x3d-mode <cache|frequency> — change AMD's scheduler CCD ranking.
-        [[ "${2:-}" == "cache" || "${2:-}" == "frequency" ]] || exit 1
+        # x3d-mode <mode> — change AMD's scheduler CCD ranking. Accept any
+        # safe token presented by the kernel driver rather than a fixed list.
+        [[ "${2:-}" =~ ^[A-Za-z0-9_-]+$ ]] || exit 1
+        # Independently require asymmetric L3 topology. This mirrors the
+        # application's dual-CCD X3D feature gate instead of trusting callers.
+        declare -A l3_sizes=()
+        for cache_size in /sys/devices/system/cpu/cpu*/cache/index3/size; do
+            [[ -r "$cache_size" ]] || continue
+            size="$(<"$cache_size")"
+            [[ -n "$size" ]] && l3_sizes["$size"]=1
+        done
+        (( ${#l3_sizes[@]} >= 2 )) || { echo "Asymmetric L3 topology not found" >&2; exit 1; }
         mode_file=""
         # Discover whichever firmware device is bound to the kernel driver.
         # The device name/instance is deliberately not supplied by the caller.
@@ -91,6 +106,49 @@ class CPUTopology:
     @property
     def has_asymmetry(self) -> bool:
         return bool(self.non_preferred)
+
+
+@dataclass(frozen=True)
+class CPUFeatures:
+    """Stable feature flags for consumers outside this module.
+
+    Callers should use these flags instead of inferring capabilities from
+    topology kinds, cache sizes, or the presence of individual sysfs files.
+    """
+    asymmetric: bool = False
+    amd_x3d: bool = False
+    intel_hybrid: bool = False
+    dual_ccd_x3d: bool = False
+    x3d_mode_control: bool = False
+
+
+@dataclass
+class CPUInfo:
+    """Central snapshot of CPU identity, layout, and controllable features."""
+    topology: CPUTopology
+    present: set[int]
+    online: set[int]
+    offline: set[int]
+    smt_siblings: set[int]
+    features: CPUFeatures
+
+    @property
+    def cpu_count(self) -> int:
+        return max(self.present) + 1 if self.present else 1
+
+
+@dataclass(frozen=True)
+class CPUControlMode:
+    value: str
+    label: str
+
+
+@dataclass
+class _StaticCPUInfo:
+    topology: CPUTopology
+    present: set[int]
+    smt_siblings: set[int]
+    features: CPUFeatures
 
 
 # ── SMT sibling detection ───────────────────────────────────────────────────
@@ -272,6 +330,66 @@ def get_offline_cpus() -> set[int]:
     return _parse_cpulist_file("/sys/devices/system/cpu/offline")
 
 
+def _detect_static_cpu_info() -> _StaticCPUInfo:
+    """Detect CPU properties that are stable for the lifetime of the app."""
+    topology = detect_topology()
+    present = _parse_cpulist_file("/sys/devices/system/cpu/present")
+    if not present:
+        present = set(range(os.cpu_count() or 1))
+    x3d_control = get_x3d_mode_path() is not None
+    is_x3d = topology.kind == TopologyKind.AMD_X3D and topology.has_asymmetry
+    features = CPUFeatures(
+        asymmetric=topology.has_asymmetry,
+        amd_x3d=is_x3d,
+        intel_hybrid=(
+            topology.kind == TopologyKind.INTEL_HYBRID
+            and topology.has_asymmetry
+        ),
+        dual_ccd_x3d=is_x3d,
+        x3d_mode_control=is_x3d and x3d_control,
+    )
+    return _StaticCPUInfo(
+        topology=topology,
+        present=present,
+        smt_siblings=get_smt_siblings_of(present),
+        features=features,
+    )
+
+
+def get_cpu_info() -> CPUInfo:
+    """Return cached topology plus current online/offline CPU state.
+
+    Static topology and feature detection runs once per application process.
+    Only the online mask is read again, since CPU hotplug state may change.
+    """
+    global _static_cpu_info_cache
+    if _static_cpu_info_cache is None:
+        with _static_cpu_info_lock:
+            if _static_cpu_info_cache is None:
+                _static_cpu_info_cache = _detect_static_cpu_info()
+    static = _static_cpu_info_cache
+    online = _parse_cpulist_file("/sys/devices/system/cpu/online")
+    if not online:
+        online = static.present - get_offline_cpus()
+    offline = static.present - online
+    return CPUInfo(
+        topology=static.topology,
+        present=set(static.present),
+        online=online,
+        offline=offline,
+        smt_siblings=set(static.smt_siblings),
+        features=static.features,
+    )
+
+
+def clear_cpu_info_cache() -> None:
+    """Clear static discovery state for tests or an explicit hardware rescan."""
+    global _static_cpu_info_cache, _topo_cache
+    with _static_cpu_info_lock:
+        _static_cpu_info_cache = None
+        _topo_cache = None
+
+
 # ── Helper installation ─────────────────────────────────────────────────────
 
 def is_helper_installed() -> bool:
@@ -297,12 +415,12 @@ def is_sudoers_installed() -> bool:
 
 
 def is_helper_current() -> bool:
-    """True if the installed helper supports all current privileged actions."""
+    """True only when the installed helper exactly matches this app version."""
     if not is_helper_installed():
         return False
     try:
-        content = open(HELPER).read()
-        return "renice-pids)" in content and "x3d-mode)" in content
+        with open(HELPER) as helper_file:
+            return helper_file.read() == HELPER_CONTENT
     except OSError:
         return False
 
@@ -395,7 +513,9 @@ def get_x3d_mode_path() -> str | None:
 
 def has_dual_ccd_x3d_control(topology: CPUTopology | None = None) -> bool:
     """True only for asymmetric AMD X3D topology with a bound mode control."""
-    topo = topology if topology is not None else detect_topology()
+    if topology is None:
+        return get_cpu_info().features.x3d_mode_control
+    topo = topology
     return (
         topo.kind == TopologyKind.AMD_X3D
         and topo.has_asymmetry
@@ -404,7 +524,9 @@ def has_dual_ccd_x3d_control(topology: CPUTopology | None = None) -> bool:
 
 
 def get_x3d_mode() -> str | None:
-    """Return ``cache`` or ``frequency``; None means unsupported/unreadable."""
+    """Return the raw mode reported by the driver, or None when unavailable."""
+    if not get_cpu_info().features.x3d_mode_control:
+        return None
     path = get_x3d_mode_path()
     if not path:
         return None
@@ -412,12 +534,33 @@ def get_x3d_mode() -> str | None:
         mode = open(path).read().strip()
     except OSError:
         return None
-    return mode if mode in {"cache", "frequency"} else None
+    return mode or None
+
+
+def get_available_x3d_modes(
+    cpu_info: CPUInfo | None = None,
+) -> tuple[CPUControlMode, ...]:
+    """Return scheduler modes supported by the detected CPU control.
+
+    The kernel ABI's cache/frequency modes are supplied directly because the
+    real amd_x3d_mode control exposes only its current value, not a choices
+    list. An unknown current raw value is retained for forward compatibility.
+    """
+    info = cpu_info if cpu_info is not None else get_cpu_info()
+    if not info.features.x3d_mode_control:
+        return ()
+    values = list(X3D_FALLBACK_MODES)
+    current = get_x3d_mode()
+    if current and current not in values:
+        values.append(current)
+    return tuple(CPUControlMode(value, value) for value in values)
 
 
 def set_x3d_mode(mode: str) -> tuple[bool, str]:
     """Set AMD's scheduler CCD preference through the privileged helper."""
-    if mode not in {"cache", "frequency"}:
+    if not get_cpu_info().features.x3d_mode_control:
+        return False, "AMD X3D mode control is not available on this CPU."
+    if not isinstance(mode, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", mode):
         return False, f"Invalid AMD X3D mode: {mode}"
     if not get_x3d_mode_path():
         return False, "AMD X3D mode control is not available on this system."

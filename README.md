@@ -16,12 +16,14 @@ A KDE/Linux process manager inspired by Windows Process Lasso. Built with Python
 
 ## Asymmetric CPU controls
 
-Settings displays the detected CPU topology. On supported asymmetric dual-CCD
-AMD X3D processors it also exposes the kernel scheduler's V-Cache/Frequency CCD
-preference.
+CPU topology and feature support are detected once when the app starts. Dynamic
+state—CPU utilization, online CPUs, and the current X3D scheduler mode—is then
+updated at the configured monitor polling interval.
 
-The preferred-CCD selector changes scheduler rankings while leaving every CPU
-online and available to the system.
+On supported asymmetric dual-CCD AMD X3D processors, Settings exposes the
+kernel scheduler's raw preferred-CCD modes. The selector is gated behind dual
+X3D CCD detection and is disabled on unsupported systems. Changing the mode
+adjusts scheduler rankings while leaving every CPU online and available.
 
 ---
 
@@ -32,7 +34,7 @@ online and available to the system.
 Add this to a Steam game's launch options:
 
 ```text
-process-lasso-game %command%
+processlasso-game %command%
 ```
 
 The wrapper asks the user service to resolve the Steam/native game identity,
@@ -41,6 +43,17 @@ temporarily selects the configured AMD X3D CCD preference. The Game Mode tab
 edits defaults, per-game overrides, aliases, and identity merges and shows live
 sessions. Explicit Rules remain field-by-field authoritative after launch;
 ProBalance and the global default affinity do not alter active game sessions.
+
+Game Mode defaults to `cache (recommended)`. Select `Disabled` if Game Mode
+should leave the global X3D scheduler mode unchanged. Settings defaults to
+`frequency (recommended)`; for games, use `processlasso-game` and Game Mode so
+the game session can temporarily select the cache CCD. These controls are only
+available when dual-CCD X3D mode control is detected.
+
+The Game Mode screen shows a green enabled indicator while sessions are active.
+A newly detected session flashes the running-session area once. If the window
+or tab is hidden, one notification is queued and displayed the next time the
+Game Mode screen is shown.
 
 ### Processes tab
 - Live process table — sortable by CPU%, memory, PID, nice, affinity, I/O
@@ -72,11 +85,11 @@ ProBalance and the global default affinity do not alter active game sessions.
 
 ### Settings tab
 - Detected CPU topology
-- AMD X3D scheduler preferred-CCD selection when supported
+- Current and configured AMD X3D scheduler preferred-CCD modes when supported
 - Default CPU affinity applied to all new processes
 - Monitor polling interval (0.5 s – 10 s)
 - Start minimized to tray on launch
-- Systemd user service autostart toggle (no root required)
+- `processlasso.service` systemd user-service autostart toggle (no root required)
 - Privileged helper status and install/update action
 
 ### System tray
@@ -90,8 +103,8 @@ ProBalance and the global default affinity do not alter active game sessions.
 - Python 3.8+
 - `psutil >= 5.9`
 - `PyQt6 >= 6.4`
-- Linux kernel ≥ 4.1 (sysfs CPU hotplug)
-- `sudo` with a NOPASSWD rule for the sysfs helper (set up via Settings)
+- Linux kernel with the relevant scheduler/sysfs interfaces for optional CPU controls
+- `sudo` with a NOPASSWD rule for the optional sysfs helper (set up via Settings)
 
 ---
 
@@ -105,7 +118,14 @@ bash install.sh
 
 The installer detects your package manager and prints the correct install command for any missing dependency.
 
-The process is named `process-lasso` by default. To customize it, change
+After installation, launch the UI with `processlasso`. The background user
+service is named `processlasso.service`; inspect it with:
+
+```bash
+systemctl --user status processlasso.service
+```
+
+The process is named `processlasso` by default. To customize it, change
 `PROCESS_NAME` in `app_identity.py` and run the installer again.
 
 ## Distro compatibility
@@ -137,7 +157,9 @@ Single-CCD X3D chips (5800X3D, 7800X3D, 9800X3D) have all cores on the same die,
 
 The detector finds the CCD with the larger L3 cache and identifies those cores
 as V-Cache cores. Use **Settings → AMD X3D — Scheduler Preferred CCD** to change
-the scheduler ranking without taking either CCD offline.
+the scheduler ranking without taking either CCD offline. Mode values come from
+the CPU/kernel interface and are presented raw, so modes beyond `cache` and
+`frequency` remain usable when exposed by the system.
 
 ### Intel Hybrid (12th gen+, Core Ultra)
 

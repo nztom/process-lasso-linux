@@ -10,7 +10,7 @@ import time
 import uuid
 from pathlib import Path
 
-import cpu_park
+import cpu_tools
 from game_identity import GameCatalog, effective_policy
 import utils
 
@@ -121,14 +121,17 @@ class GameSessionManager:
                 "game_name": session["game_name"], "policy": policy}
 
     def _activate_ccd(self, preference):
-        if preference not in ("cache", "frequency"):
+        if not preference:
             return
-        current = cpu_park.get_x3d_mode()
+        if not cpu_tools.get_cpu_info().features.x3d_mode_control:
+            self._log("[Game Mode] AMD X3D scheduler preference unavailable")
+            return
+        current = cpu_tools.get_x3d_mode()
         if current is None:
             self._log("[Game Mode] AMD X3D scheduler preference unavailable")
             return
         self._saved_ccd = current
-        ok, message = cpu_park.set_x3d_mode(preference)
+        ok, message = cpu_tools.set_x3d_mode(preference)
         if not ok:
             self._log(f"[Game Mode] X3D activation failed: {message}")
         else:
@@ -138,16 +141,24 @@ class GameSessionManager:
         """Change Game Mode's preference without losing the saved global mode."""
         self.config.setdefault("game_mode", {})["ccd_preference"] = preference
         if self.sessions:
-            ok, message = cpu_park.set_x3d_mode(preference)
-            if ok:
-                self._active_ccd = preference
+            if preference:
+                ok, message = cpu_tools.set_x3d_mode(preference)
+                if ok:
+                    self._active_ccd = preference
+                else:
+                    self._log(f"[Game Mode] X3D preference change failed: {message}")
             else:
-                self._log(f"[Game Mode] X3D preference change failed: {message}")
+                if self._saved_ccd:
+                    ok, message = cpu_tools.set_x3d_mode(self._saved_ccd)
+                    if not ok:
+                        self._log(f"[Game Mode] X3D restore failed: {message}")
+                self._saved_ccd = None
+                self._active_ccd = None
             self._persist()
 
     def _restore_ccd(self):
         if self._saved_ccd:
-            ok, message = cpu_park.set_x3d_mode(self._saved_ccd)
+            ok, message = cpu_tools.set_x3d_mode(self._saved_ccd)
             if not ok:
                 self._log(f"[Game Mode] X3D restore failed: {message}")
         self._saved_ccd = None
@@ -164,10 +175,10 @@ class GameSessionManager:
         # active, remember it as the new restoration target and keep the Game
         # Mode preference active until the last session exits.
         if self.sessions and self._active_ccd:
-            current = cpu_park.get_x3d_mode()
+            current = cpu_tools.get_x3d_mode()
             if current and current != self._active_ccd:
                 self._saved_ccd = current
-                ok, message = cpu_park.set_x3d_mode(self._active_ccd)
+                ok, message = cpu_tools.set_x3d_mode(self._active_ccd)
                 if not ok:
                     self._log(f"[Game Mode] X3D reactivation failed: {message}")
         by_pid = {int(p["pid"]): p for p in records}

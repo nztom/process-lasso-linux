@@ -32,7 +32,7 @@ def _request(argv, profile=None):
         except OSError:
             if not started:
                 try:
-                    subprocess.run(["systemctl", "--user", "start", "process-lasso.service"],
+                    subprocess.run(["systemctl", "--user", "start", "processlasso.service"],
                                    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except OSError:
                     pass
@@ -44,7 +44,7 @@ def _request(argv, profile=None):
 
 
 def main(arguments=None):
-    parser = argparse.ArgumentParser(prog="process-lasso-game")
+    parser = argparse.ArgumentParser(prog="processlasso-game")
     parser.add_argument("--profile")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(arguments)
@@ -56,10 +56,10 @@ def main(arguments=None):
     response = _request(command, args.profile)
     if response.get("ok"):
         for error in apply_launch_policy(os.getpid(), response.get("policy", {})):
-            print(f"process-lasso-game: {error}", file=sys.stderr)
+            print(f"processlasso-game: {error}", file=sys.stderr)
         os.environ[MARKER_ENV] = response["token"]
     else:
-        print(f"process-lasso-game: {response.get('error', 'activation failed')}; launching normally",
+        print(f"processlasso-game: {response.get('error', 'activation failed')}; launching normally",
               file=sys.stderr)
     os.execvp(command[0], command)
 

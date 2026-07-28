@@ -228,6 +228,7 @@ class MainWindow(QMainWindow):
         self._proc_table.update_throttled(throttled)
         self._proc_table.update_snapshot(snapshot)
         self._game_tab.refresh()
+        self._settings_tab.refresh_current_x3d_mode()
         count = len(snapshot)
         self._tabs.setTabText(0, f"Processes ({count})")
         pb_idx = self._tabs.indexOf(self._pb_tab)
@@ -358,6 +359,7 @@ class MainWindow(QMainWindow):
         self._config["game_mode"] = game_config
         self._game_sessions.config = self._config
         self._game_sessions.set_ccd_preference(game_config.get("ccd_preference"))
+        self._settings_tab.refresh_cpu_state()
         self._save_config()
 
     def _save_config(self):

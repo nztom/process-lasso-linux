@@ -6,10 +6,14 @@
 set -e
 
 INSTALL_DIR="$HOME/.local/share/process-lasso"
-LAUNCHER="/usr/local/bin/process-lasso"
-GAME_LAUNCHER="/usr/local/bin/process-lasso-game"
-DESKTOP="$HOME/.local/share/applications/process-lasso.desktop"
-SERVICE="$HOME/.config/systemd/user/process-lasso.service"
+LAUNCHER="/usr/local/bin/processlasso"
+GAME_LAUNCHER="/usr/local/bin/processlasso-game"
+LEGACY_LAUNCHER="/usr/local/bin/process-lasso"
+LEGACY_GAME_LAUNCHER="/usr/local/bin/process-lasso-game"
+DESKTOP="$HOME/.local/share/applications/processlasso.desktop"
+LEGACY_DESKTOP="$HOME/.local/share/applications/process-lasso.desktop"
+SERVICE="$HOME/.config/systemd/user/processlasso.service"
+LEGACY_SERVICE="$HOME/.config/systemd/user/process-lasso.service"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -42,12 +46,12 @@ detect_pkg_manager
 if [[ "$1" == "--uninstall" ]]; then
     info "Stopping and disabling service..."
     if command -v systemctl &>/dev/null; then
-        systemctl --user stop  process-lasso.service 2>/dev/null || true
-        systemctl --user disable process-lasso.service 2>/dev/null || true
+        systemctl --user stop processlasso.service process-lasso.service 2>/dev/null || true
+        systemctl --user disable processlasso.service process-lasso.service 2>/dev/null || true
     fi
     info "Removing files..."
-    rm -f "$DESKTOP" "$SERVICE"
-    sudo rm -f "$LAUNCHER" "$GAME_LAUNCHER" 2>/dev/null || warn "Could not remove launchers (run with sudo manually)"
+    rm -f "$DESKTOP" "$LEGACY_DESKTOP" "$SERVICE" "$LEGACY_SERVICE"
+    sudo rm -f "$LAUNCHER" "$GAME_LAUNCHER" "$LEGACY_LAUNCHER" "$LEGACY_GAME_LAUNCHER" 2>/dev/null || warn "Could not remove launchers (run with sudo manually)"
     info "Config preserved at ~/.config/process-lasso/ — remove manually if desired."
     info "App files preserved at $INSTALL_DIR — remove manually if desired."
     if command -v systemctl &>/dev/null; then
@@ -89,6 +93,7 @@ exec python3 $INSTALL_DIR/process_lasso_game.py \"\$@\"
 "
     echo "$GAME_LAUNCHER_CONTENT" | sudo tee "$GAME_LAUNCHER" > /dev/null
     sudo chmod +x "$GAME_LAUNCHER"
+    sudo rm -f "$LEGACY_LAUNCHER" "$LEGACY_GAME_LAUNCHER"
     info "Launcher installed."
 else
     warn "sudo not available. Manually create $LAUNCHER:"
@@ -98,6 +103,7 @@ fi
 # ── Desktop entry ──────────────────────────────────────────────────────────
 info "Installing desktop entry..."
 mkdir -p "$(dirname "$DESKTOP")"
+rm -f "$LEGACY_DESKTOP"
 cat > "$DESKTOP" << EOF
 [Desktop Entry]
 Name=Process Lasso
@@ -130,11 +136,13 @@ RestartSec=5
 WantedBy=graphical-session.target
 EOF
 
+    systemctl --user disable --now process-lasso.service 2>/dev/null || true
+    rm -f "$LEGACY_SERVICE"
     systemctl --user daemon-reload
-    systemctl --user enable process-lasso.service
+    systemctl --user enable processlasso.service
     info "Service enabled (starts automatically with graphical session)."
 else
-    warn "systemd not available — autostart not configured. Run 'process-lasso' manually or set up autostart via your DE."
+    warn "systemd not available — autostart not configured. Run 'processlasso' manually or set up autostart via your DE."
 fi
 
 # ── CPU topology detection + privileged helper ─────────────────────────────
@@ -142,12 +150,12 @@ info "Detecting CPU topology..."
 python3 -c "
 import sys
 sys.path.insert(0, '$INSTALL_DIR')
-import cpu_park
-topo = cpu_park.detect_topology()
+import cpu_tools
+topo = cpu_tools.get_cpu_info().topology
 print(topo.description)
 if topo.has_asymmetry:
-    pref_str = cpu_park._fmt(topo.preferred)
-    npref_str = cpu_park._fmt(topo.non_preferred)
+    pref_str = cpu_tools._fmt(topo.preferred)
+    npref_str = cpu_tools._fmt(topo.non_preferred)
     print(f'  Preferred CPUs  (game):  {pref_str}')
     print(f'  Non-preferred   (background): {npref_str}')
     print('Asymmetric CPU topology controls will be available in Settings.')
@@ -159,10 +167,10 @@ info "Installing privileged sysfs helper (requires root)..."
 python3 -c "
 import sys, os, getpass
 sys.path.insert(0, '$INSTALL_DIR')
-import cpu_park
+import cpu_tools
 username = os.environ.get('USER') or ''
 password = getpass.getpass('Root password: ')
-ok, msg = cpu_park.install_helper_as_root(username=username, password=password)
+ok, msg = cpu_tools.install_helper_as_root(username=username, password=password)
 print(msg)
 if ok:
     print('Helper installed. sudo NOPASSWD rule created.')
@@ -175,9 +183,9 @@ else:
 echo
 echo -e "${GREEN}Installation complete!${NC}"
 echo
-echo "  Start now:      process-lasso"
-echo "  Start service:  systemctl --user start process-lasso.service"
-echo "  Usage:           process-lasso-game %command%"
+echo "  Start now:      processlasso"
+echo "  Start service:  systemctl --user start processlasso.service"
+echo "  Usage:           processlasso-game %command%"
 echo "  Uninstall:      bash $INSTALL_DIR/install.sh --uninstall"
 echo
 echo "Asymmetric CPU controls (AMD X3D / Intel Hybrid):"

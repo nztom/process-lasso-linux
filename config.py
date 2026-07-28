@@ -70,8 +70,8 @@ def _initialize_game_mode_defaults(config: dict) -> dict:
     if game_mode.get("defaults_initialized", False):
         return config
     try:
-        import cpu_park
-        preferred = set(cpu_park.detect_topology().preferred)
+        import cpu_tools
+        preferred = set(cpu_tools.get_cpu_info().topology.preferred)
     except Exception:
         preferred = set()
     game_mode["affinity"] = _compact_cpulist(preferred)

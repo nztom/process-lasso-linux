@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import QApplication
 
 import app_identity
 import config
+import utils
 from gui.main_window import MainWindow
 from windows_theme import WINDOWS_DARK_THEME
 
@@ -22,6 +23,8 @@ logging.basicConfig(
     level=logging.WARNING,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+
+STARTUP_NICE = 15
 
 
 def _set_process_name(name: str) -> None:
@@ -34,8 +37,19 @@ def _set_process_name(name: str) -> None:
         logging.getLogger(__name__).debug("Could not set process name", exc_info=True)
 
 
+def _apply_startup_nice() -> bool:
+    """Apply a one-time responsiveness boost that later rules may override."""
+    applied = utils.set_nice(os.getpid(), STARTUP_NICE)
+    if not applied:
+        logging.getLogger(__name__).warning(
+            "Could not apply startup nice priority %d", STARTUP_NICE
+        )
+    return applied
+
+
 def main():
     _set_process_name(app_identity.PROCESS_NAME)
+    _apply_startup_nice()
 
     # Required before QApplication on some platforms.
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")

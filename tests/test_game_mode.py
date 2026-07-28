@@ -45,9 +45,9 @@ class GameIdentityTests(unittest.TestCase):
 
 
 class GameModeDefaultTests(unittest.TestCase):
-    @mock.patch("cpu_park.detect_topology")
-    def test_initial_defaults_use_preferred_cores_and_absolute_minus_one(self, topology):
-        topology.return_value = mock.Mock(preferred={0, 1, 4, 5})
+    @mock.patch("cpu_tools.get_cpu_info")
+    def test_initial_defaults_use_preferred_cores_and_absolute_minus_one(self, cpu_info):
+        cpu_info.return_value.topology.preferred = {0, 1, 4, 5}
         loaded = config._initialize_game_mode_defaults({"game_mode": {}})
         game_mode_config = loaded["game_mode"]
         self.assertEqual(game_mode_config["affinity"], "0-1,4-5")
@@ -56,14 +56,14 @@ class GameModeDefaultTests(unittest.TestCase):
         })
         self.assertTrue(game_mode_config["defaults_initialized"])
 
-    @mock.patch("cpu_park.detect_topology")
-    def test_initialized_defaults_preserve_explicitly_disabled_fields(self, topology):
+    @mock.patch("cpu_tools.get_cpu_info")
+    def test_initialized_defaults_preserve_explicitly_disabled_fields(self, cpu_info):
         loaded = config._initialize_game_mode_defaults({"game_mode": {
             "defaults_initialized": True, "affinity": None, "nice": None,
         }})
         self.assertIsNone(loaded["game_mode"]["affinity"])
         self.assertIsNone(loaded["game_mode"]["nice"])
-        topology.assert_not_called()
+        cpu_info.assert_not_called()
 
 
 class LaunchPolicyTests(unittest.TestCase):
@@ -78,6 +78,26 @@ class LaunchPolicyTests(unittest.TestCase):
         self.assertEqual(errors, [])
         affinity.assert_called_once_with(42, "0-3")
         nice.assert_called_once_with(42, 19)
+
+
+class GameSessionPreferenceTests(unittest.TestCase):
+    @mock.patch.object(game_mode.GameSessionManager, "_load_state")
+    @mock.patch.object(game_mode.GameSessionManager, "_persist")
+    @mock.patch("game_mode.cpu_tools.set_x3d_mode", return_value=(True, "ok"))
+    def test_disabling_ccd_switching_restores_mode_during_active_session(
+        self, set_mode, _persist, _load_state
+    ):
+        manager = game_mode.GameSessionManager({"game_mode": {}})
+        manager.sessions = {"session": {"token": "session"}}
+        manager._saved_ccd = "frequency"
+        manager._active_ccd = "cache"
+
+        manager.set_ccd_preference(None)
+
+        set_mode.assert_called_once_with("frequency")
+        self.assertIsNone(manager._saved_ccd)
+        self.assertIsNone(manager._active_ccd)
+        self.assertIsNone(manager.config["game_mode"]["ccd_preference"])
 
     @mock.patch("process_lasso_game.os.execvp")
     @mock.patch("process_lasso_game.apply_launch_policy", return_value=[])
