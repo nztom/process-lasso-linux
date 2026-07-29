@@ -1,8 +1,6 @@
 """Main window: 5-tab layout + system tray integration."""
 from __future__ import annotations
 
-import os
-
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
@@ -51,10 +49,10 @@ class MainWindow(QMainWindow):
             w, h = 1100, 820
         self.resize(w, h)
 
-        # App icon
-        _icon_path = "/usr/share/icons/hicolor/scalable/apps/process-lasso-linux.svg"
-        if os.path.exists(_icon_path):
-            _icon = QIcon(_icon_path)
+        # Use the same scalable themed icon as the tray.  The desktop shell can
+        # request a larger pixmap for the window switcher, dock, and taskbar.
+        _icon = QIcon.fromTheme("utilities-system-monitor")
+        if not _icon.isNull():
             self.setWindowIcon(_icon)
             self._app.setWindowIcon(_icon)
 

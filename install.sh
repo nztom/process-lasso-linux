@@ -110,6 +110,7 @@ Name=Process Lasso
 Comment=Linux process manager with CPU affinity, nice priority, and ProBalance
 Exec=$LAUNCHER
 Icon=utilities-system-monitor
+StartupWMClass=Process Lasso
 Terminal=false
 Type=Application
 Categories=System;Monitor;

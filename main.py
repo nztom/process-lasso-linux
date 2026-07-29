@@ -58,6 +58,7 @@ def main():
     app.setApplicationName("Process Lasso")
     app.setApplicationDisplayName("Process Lasso")
     app.setOrganizationName("process-lasso")
+    app.setDesktopFileName("processlasso")
 
     config.load()
     app.setStyleSheet(WINDOWS_DARK_THEME)
