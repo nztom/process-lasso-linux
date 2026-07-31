@@ -24,6 +24,13 @@ from gui.game_mode_tab import GameModeTab
 from game_mode import GameIPCServer, GameSessionManager
 
 
+def _window_size_for_available(width: int, height: int) -> tuple[int, int]:
+    """Return the usual startup size, capped to the available workspace."""
+    preferred_width = max(1000, min(1500, int(width * 0.82)))
+    preferred_height = max(700, min(1050, int(height * 0.84)))
+    return min(width, preferred_width), min(height, preferred_height)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, app: QApplication):
         super().__init__()
@@ -37,16 +44,17 @@ class MainWindow(QMainWindow):
         )
 
         self.setWindowTitle("Process Lasso")
-        self.setMinimumSize(860, 620)
 
-        # Scale default window size to available screen real estate
+        # Keep the normal startup size, but allow small or unusually shaped
+        # displays to constrain both the initial and minimum window sizes.
         screen = QApplication.primaryScreen()
         if screen:
             avail = screen.availableGeometry()
-            w = max(1000, min(1500, int(avail.width() * 0.82)))
-            h = max(700, min(1050, int(avail.height() * 0.84)))
+            w, h = _window_size_for_available(avail.width(), avail.height())
+            self.setMinimumSize(min(860, w), min(620, h))
         else:
             w, h = 1100, 820
+            self.setMinimumSize(860, 620)
         self.resize(w, h)
 
         # Use the same scalable themed icon as the tray.  The desktop shell can
