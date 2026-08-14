@@ -41,7 +41,7 @@ class ProcessRuntimeCleanupTests(unittest.TestCase):
         monitor._process_cache = {
             73: {"pid": 73, "create_time": 1.0, "comm": "same"}
         }
-        proc = mock.Mock(pid=73)
+        proc = mock.MagicMock(pid=73)
         proc.create_time.return_value = 2.0
         proc.name.return_value = "same"
         safe_identity.return_value = None

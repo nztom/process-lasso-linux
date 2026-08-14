@@ -31,6 +31,7 @@ DEFAULT_CONFIG = {
     },
     "monitor": {
         "display_refresh_interval_ms": 2000,
+        "process_scan_interval_ms": 1000,
         "rule_enforce_interval_ms": 500,
     },
     "ui": {

@@ -203,6 +203,13 @@ class RuleEngine:
         """Return True when at least one enabled rule matches a process name."""
         return any(rule.matches(proc_name) for rule in self._rules)
 
+    def requires_continuous_enforcement(self, proc_name: str) -> bool:
+        """Return True when a matching rule explicitly requests force-apply."""
+        return any(
+            rule.force_apply and rule.matches(proc_name)
+            for rule in self._rules
+        )
+
     def effective_policy(self, proc_name: str) -> EffectiveProcessPolicy:
         """Return the typed final policy produced by matching enabled rules.
 

@@ -19,6 +19,22 @@ from rules import Rule, RuleEngine
 
 
 class MonitorSamplingTests(unittest.TestCase):
+    def test_monitor_intervals_update_and_wake_worker_immediately(self):
+        monitor = MonitorThread(RuleEngine(), ProBalance({}), {})
+        updated = {
+            "monitor": {
+                "rule_enforce_interval_ms": 250,
+                "process_scan_interval_ms": 750,
+                "display_refresh_interval_ms": 1500,
+            }
+        }
+
+        with mock.patch.object(monitor._wake_event, "set") as wake:
+            monitor.update_config(updated)
+
+        wake.assert_called_once_with()
+        self.assertEqual(monitor._monitor_intervals(), (0.25, 0.75, 1.5))
+
     def test_identity_and_metrics_are_collected_separately(self):
         proc = psutil.Process(os.getpid())
 
@@ -155,7 +171,7 @@ class MonitorSamplingTests(unittest.TestCase):
         monitor._known_tids_by_pid[7] = {7, 8}
         monitor._manually_overridden_pids.add(7)
         probalance._states[ProcessIdentity(7, 1.0)] = mock.Mock()
-        proc = mock.Mock(pid=7)
+        proc = mock.MagicMock(pid=7)
         proc.create_time.return_value = 2.0
         proc.name.return_value = "game"
         replacement = {
@@ -209,6 +225,34 @@ class MonitorSamplingTests(unittest.TestCase):
 
         set_affinity.assert_called_once_with(201, "0-3")
 
+    @mock.patch("monitor.utils.get_process_tids")
+    def test_default_only_processes_skip_fast_thread_scan(self, get_tids):
+        monitor = MonitorThread(
+            RuleEngine(),
+            ProBalance({}),
+            {"cpu": {"default_affinity": "0-3"}},
+        )
+        monitor._process_cache = {200: {"pid": 200, "name": "worker"}}
+        monitor._known_tids_by_pid = {200: {200}}
+
+        monitor._sync_new_threads(include_defaults=False)
+
+        get_tids.assert_not_called()
+
+    @mock.patch("monitor.utils.get_process_tids", return_value=[200, 201])
+    def test_rule_processes_keep_fast_thread_scan(self, get_tids):
+        engine = RuleEngine()
+        engine.add_rule(Rule(pattern="worker", affinity="0-3"))
+        monitor = MonitorThread(engine, ProBalance({}), {})
+        monitor._process_cache = {200: {"pid": 200, "name": "worker"}}
+        monitor._known_tids_by_pid = {200: {200}}
+
+        with mock.patch.object(engine, "apply_to_thread") as apply_thread:
+            monitor._sync_new_threads(include_defaults=False)
+
+        get_tids.assert_called_once_with(200)
+        apply_thread.assert_called_once_with(200, 201, "worker")
+
     @mock.patch("monitor.utils.set_thread_affinity", return_value=True)
     @mock.patch("monitor.utils.get_process_tids", return_value=[200, 201])
     def test_manual_override_suppresses_default_on_new_threads(
@@ -236,7 +280,7 @@ class MonitorSamplingTests(unittest.TestCase):
         }
         original = frozenset({0, 1})
         monitor._original_affinities[7] = original
-        proc = mock.Mock(pid=7)
+        proc = mock.MagicMock(pid=7)
         proc.create_time.return_value = 1.0
         proc.name.return_value = "game"
         replacement = {

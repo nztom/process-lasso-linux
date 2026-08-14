@@ -121,12 +121,28 @@ class SettingsTab(QWidget):
         self._rule_interval.setRange(100, 10000)
         self._rule_interval.setSuffix(" ms")
         self._rule_interval.setValue(500)
-        mon_form.addRow("Rule enforce interval:", self._rule_interval)
+        self._rule_interval.setToolTip(
+            "How often force-apply rules are checked on known processes."
+        )
+        mon_form.addRow("Continuous rule enforce interval:", self._rule_interval)
+
+        self._process_scan_interval = QSpinBox()
+        self._process_scan_interval.setRange(250, 10000)
+        self._process_scan_interval.setSuffix(" ms")
+        self._process_scan_interval.setValue(1000)
+        self._process_scan_interval.setToolTip(
+            "How often processes are discovered and ProBalance samples CPU usage."
+        )
+        mon_form.addRow("Process scan / ProBalance interval:",
+                        self._process_scan_interval)
 
         self._display_interval = QSpinBox()
         self._display_interval.setRange(500, 10000)
         self._display_interval.setSuffix(" ms")
         self._display_interval.setValue(2000)
+        self._display_interval.setToolTip(
+            "How often process and CPU data are sent to the UI."
+        )
         mon_form.addRow("Display refresh interval:", self._display_interval)
 
         apply_mon_btn = QPushButton("Apply Monitor Settings")
@@ -271,6 +287,9 @@ class SettingsTab(QWidget):
 
         mon = self._config.get("monitor", {})
         self._rule_interval.setValue(mon.get("rule_enforce_interval_ms", 500))
+        self._process_scan_interval.setValue(
+            mon.get("process_scan_interval_ms", 1000)
+        )
         self._display_interval.setValue(mon.get("display_refresh_interval_ms", 2000))
 
         # Autostart: check if systemd user service is enabled
@@ -315,6 +334,7 @@ class SettingsTab(QWidget):
 
     def _apply_monitor(self):
         self._config.setdefault("monitor", {})["rule_enforce_interval_ms"] = self._rule_interval.value()
+        self._config.setdefault("monitor", {})["process_scan_interval_ms"] = self._process_scan_interval.value()
         self._config.setdefault("monitor", {})["display_refresh_interval_ms"] = self._display_interval.value()
         self.settings_changed.emit(self._config)
         QMessageBox.information(self, "Monitor Settings", "Settings applied.")

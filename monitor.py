@@ -5,6 +5,7 @@ import os
 import pwd
 import time
 import logging
+import threading
 
 import psutil
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -142,14 +143,26 @@ def _update_proc_metrics(
 ) -> bool:
     """Refresh dynamic fields; expensive display details are optional."""
     try:
+        prefetched = proc.info if isinstance(getattr(proc, "info", None), dict) else {}
         with proc.oneshot():
-            info["cpu_percent"] = proc.cpu_percent()
-            try:
-                info["nice"] = proc.nice()
-            except (psutil.AccessDenied, AttributeError):
-                pass
+            cpu_percent = prefetched.get("cpu_percent")
+            info["cpu_percent"] = (
+                proc.cpu_percent() if cpu_percent is None else cpu_percent
+            )
+            nice = prefetched.get("nice")
+            if nice is not None:
+                info["nice"] = nice
+            else:
+                try:
+                    info["nice"] = proc.nice()
+                except (psutil.AccessDenied, AttributeError):
+                    pass
             if include_details:
-                info["mem_rss"] = proc.memory_info().rss
+                memory_info = prefetched.get("memory_info")
+                info["mem_rss"] = (
+                    proc.memory_info().rss
+                    if memory_info is None else memory_info.rss
+                )
                 try:
                     affinity = proc.cpu_affinity()
                     info["affinity"] = utils._cpuset_to_cpulist(set(affinity))
@@ -176,9 +189,9 @@ def _safe_proc_info(proc: psutil.Process) -> ProcessInfo | None:
 class MonitorThread(QThread):
     """
     Background thread that:
-    - Every 0.5s: continues the startup rule burst for new processes
-    - Every 1.0s: runs ProBalance tick
-    - Every 2.0s: emits process_snapshot_ready with a copy of the snapshot
+    - Every 0.5s: enforces rules explicitly marked force-apply
+    - Every 1–2s: discovers processes and runs ProBalance (display-capped)
+    - Every 2.0s: checks normal rule drift and emits a display snapshot
     - On new PID: applies matching rule, or default affinity if no rule matched
     """
 
@@ -195,6 +208,7 @@ class MonitorThread(QThread):
         self._game_sessions = game_sessions
         self._game_memberships = {}
         self._stop = False
+        self._wake_event = threading.Event()
         self._known_pids: set[int] = set()
         self._known_tids_by_pid: dict[int, set[int]] = {}
         self._manually_overridden_pids: set[int] = set()
@@ -223,6 +237,8 @@ class MonitorThread(QThread):
     def update_config(self, config: dict):
         self._config = config
         self._probalance.update_config(config.get("probalance", {}))
+        # Interrupt the current wait so new monitor intervals take effect now.
+        self._wake_event.set()
 
     def reapply_all_defaults(self):
         """Force re-apply default affinity to all currently known PIDs.
@@ -254,6 +270,21 @@ class MonitorThread(QThread):
     def stop(self):
         self._rule_engine.flush_priority_state()
         self._stop = True
+        self._wake_event.set()
+
+    def _monitor_intervals(self) -> tuple[float, float, float]:
+        """Return current rule, process-scan, and display intervals in seconds."""
+        monitor = self._config.get("monitor", {})
+        return (
+            max(0.001, monitor.get("rule_enforce_interval_ms", 500) / 1000.0),
+            max(0.001, monitor.get("process_scan_interval_ms", 1000) / 1000.0),
+            max(0.001, monitor.get("display_refresh_interval_ms", 2000) / 1000.0),
+        )
+
+    def _wait_for_wake(self, timeout: float):
+        """Wait interruptibly for shutdown or a saved configuration change."""
+        self._wake_event.wait(timeout)
+        self._wake_event.clear()
 
     def reset_all_affinities(self):
         """Restore every process we touched back to its original affinity.
@@ -348,10 +379,18 @@ class MonitorThread(QThread):
         return not session or self._game_sessions.launch_has_started(
             session, int(info["pid"]), str(info["name"]))
 
-    def _sync_new_threads(self):
-        """Apply process rules to TIDs first observed after process startup."""
+    def _sync_new_threads(self, *, include_defaults: bool = True):
+        """Apply process rules to TIDs first observed after process startup.
+
+        Rule-managed processes are checked on every enforcement pass.  Threads
+        normally inherit their creator's affinity, so the global default only
+        needs the slower display-cadence safety scan.
+        """
         default = self._default_affinity()
         for pid, info in list(self._process_cache.items()):
+            matched = self._rule_engine.matches_process(info["name"])
+            if not matched and (not include_defaults or not default):
+                continue
             current_tids = set(utils.get_process_tids(pid))
             if not current_tids:
                 continue
@@ -360,7 +399,7 @@ class MonitorThread(QThread):
             for tid in sorted(new_tids):
                 if not self._rules_ready(info):
                     continue
-                if self._rule_engine.matches_process(info["name"]):
+                if matched:
                     self._rule_engine.apply_to_thread(pid, tid, info["name"])
                 elif (
                     default
@@ -399,8 +438,25 @@ class MonitorThread(QThread):
                     self._apply_new_pid(refreshed)
                 continue
             try:
-                pid_reused = by_pid[pid].create_time() != info.get("create_time")
-                command_changed = by_pid[pid].name() != info.get("comm")
+                # Both values come from /proc/<pid>/stat on Linux.  oneshot()
+                # lets psutil share that read instead of doing it twice for
+                # every process on every enforcement pass.
+                prefetched = (
+                    by_pid[pid].info
+                    if isinstance(getattr(by_pid[pid], "info", None), dict)
+                    else {}
+                )
+                with by_pid[pid].oneshot():
+                    create_time = prefetched.get("create_time")
+                    if create_time is None:
+                        create_time = by_pid[pid].create_time()
+                    comm = prefetched.get("name")
+                    if comm is None:
+                        comm = by_pid[pid].name()
+                    pid_reused = (
+                        create_time != info.get("create_time")
+                    )
+                    command_changed = comm != info.get("comm")
                 if pid_reused:
                     self._forget_process(pid)
                 if pid_reused or command_changed:
@@ -422,15 +478,18 @@ class MonitorThread(QThread):
         last_enforce = 0.0
         last_probalance = 0.0
         last_snapshot = 0.0
+        last_full_enforce = 0.0
         last_pb_tick = time.monotonic()
-
-        enforce_interval = self._config.get("monitor", {}).get("rule_enforce_interval_ms", 500) / 1000.0
-        snapshot_interval = self._config.get("monitor", {}).get("display_refresh_interval_ms", 2000) / 1000.0
 
         snapshot: list[ProcessSnapshot] = []
 
         while not self._stop:
           try:
+            # update_config() wakes this loop, so saved values replace the old
+            # cadence without waiting for the previous interval to expire.
+            enforce_interval, process_scan_interval, snapshot_interval = (
+                self._monitor_intervals()
+            )
             now = time.monotonic()
 
             elapsed_enforce = now - last_enforce
@@ -438,29 +497,49 @@ class MonitorThread(QThread):
             elapsed_snap = now - last_snapshot
 
             enforce_due = elapsed_enforce >= enforce_interval
-            pb_due = elapsed_pb >= 1.0
+            pb_due = elapsed_pb >= process_scan_interval
             snapshot_due = elapsed_snap >= snapshot_interval
+            full_enforce_due = now - last_full_enforce >= snapshot_interval
 
             if not (enforce_due or pb_due or snapshot_due):
-                time.sleep(tick_interval)
+                self._wait_for_wake(tick_interval)
                 continue
 
-            try:
-                procs = list(psutil.process_iter())
-            except Exception:
-                procs = []
-            by_pid = self._sync_processes(procs)
-            if self._game_sessions:
-                self._game_memberships = self._game_sessions.refresh(
-                    self._observed_records()
-                )
+            by_pid = {}
+            # Process discovery is needed for metrics and ProBalance, not for
+            # each fast enforcement pass over already-known processes.
+            if pb_due or snapshot_due:
+                try:
+                    # psutil collects these fields under one per-process
+                    # oneshot cache. The same prefetched values are reused by
+                    # identity synchronization and metric sampling below.
+                    attrs = [
+                        "pid", "name", "create_time", "cpu_percent", "nice",
+                    ]
+                    if snapshot_due:
+                        attrs.append("memory_info")
+                    procs = list(psutil.process_iter(attrs=attrs, ad_value=None))
+                except Exception:
+                    procs = []
+                by_pid = self._sync_processes(procs)
+                if self._game_sessions and self._game_sessions.sessions:
+                    self._game_memberships = self._game_sessions.refresh(
+                        self._observed_records()
+                    )
 
             # Give newly seen matching processes a short rule burst.
             if enforce_due:
                 for info in self._process_cache.values():
-                    if self._rules_ready(info):
+                    if self._rules_ready(info) and (
+                        full_enforce_due
+                        or self._rule_engine.requires_continuous_enforcement(
+                            info["name"]
+                        )
+                    ):
                         self._rule_engine.apply_to_process(info["pid"], info["name"])
-                self._sync_new_threads()
+                if full_enforce_due:
+                    self._sync_new_threads(include_defaults=True)
+                    last_full_enforce = now
                 last_enforce = now
 
             # Refresh CPU/nice only when ProBalance or the display needs them.
@@ -469,9 +548,10 @@ class MonitorThread(QThread):
                     proc = by_pid.get(pid)
                     if proc is not None:
                         _update_proc_metrics(proc, info, include_details=snapshot_due)
-            # The GUI receives these across a queued signal. Copy nested
-            # records so later worker updates cannot mutate UI-owned data.
-            snapshot = self._observed_records()
+            # Avoid allocating a full immutable snapshot on enforcement-only
+            # passes. ProBalance and the GUI are its only consumers.
+            if pb_due or snapshot_due:
+                snapshot = self._observed_records()
 
             # ProBalance every 1.0s
             if pb_due:
@@ -508,7 +588,8 @@ class MonitorThread(QThread):
                     pass
                 last_snapshot = now
 
-            time.sleep(tick_interval)
+            self._wait_for_wake(tick_interval)
           except Exception as exc:
             log.exception("MonitorThread: unexpected error in main loop: %s", exc)
-            time.sleep(1.0)  # brief back-off to avoid busy-spinning on persistent errors
+            # Keep error back-off interruptible for shutdown and settings saves.
+            self._wait_for_wake(1.0)
