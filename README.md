@@ -56,7 +56,8 @@ or tab is hidden, one notification is queued and displayed the next time the
 Game Mode screen is shown.
 
 ### Processes tab
-- Live process table — sortable by CPU%, memory, PID, nice, affinity, I/O
+- Live process table — sortable by CPU%, RAM, NVIDIA GPU%, GPU memory, PID,
+  nice, affinity, and I/O
 - **Per-CPU utilization bars** — htop-style with colour ramp (green → yellow → orange → red by load)
 - **CPU frequency display** — each bar shows current GHz (e.g. `4.43G`) alongside utilization %
 - **Temperature tint** — bars shift orange as core temps rise (reads from hwmon/k10temp/zenpower)

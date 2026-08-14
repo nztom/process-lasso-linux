@@ -528,6 +528,51 @@ class ProcessTableTests(unittest.TestCase):
 
         self.assertNotIn(100, table._expanded_pids)
 
+    @mock.patch("gui.process_table.utils.set_affinity", return_value=True)
+    @mock.patch(
+        "gui.process_table.utils.get_aggregate_affinity_str",
+        return_value="0-7,18-23",
+    )
+    @mock.patch("gui.process_table.AffinityDialog")
+    def test_affinity_picker_opens_with_live_thread_aggregate(
+        self, dialog_type, aggregate_affinity, _set_affinity
+    ):
+        engine = RuleEngine()
+        table = ProcessTable(engine, None)
+        process = self._process(100, "game", "user")
+        process["affinity"] = "0"
+        picker = dialog_type.return_value
+        picker.exec.return_value = dialog_type.DialogCode.Accepted
+        picker.get_cpulist.return_value = "0-7,18-23"
+
+        table._do_set_affinity(self._view(engine, process))
+
+        aggregate_affinity.assert_called_once_with(100, "0")
+        dialog_type.assert_called_once_with(
+            "0-7,18-23", table, "game",
+            current_summary="0 (0-7,18-23)",
+        )
+
+    @mock.patch(
+        "gui.process_table.utils.get_aggregate_affinity_str", return_value="0-3"
+    )
+    @mock.patch("gui.process_table.AffinityDialog")
+    def test_affinity_picker_omits_duplicate_aggregate_from_summary(
+        self, dialog_type, _aggregate_affinity
+    ):
+        engine = RuleEngine()
+        table = ProcessTable(engine, None)
+        picker = dialog_type.return_value
+        picker.exec.return_value = dialog_type.DialogCode.Rejected
+
+        table._do_set_affinity(
+            self._view(engine, self._process(100, "worker", "user"))
+        )
+
+        dialog_type.assert_called_once_with(
+            "0-3", table, "worker", current_summary="0-3"
+        )
+
     @staticmethod
     def _process(pid: int, name: str, user: str) -> dict:
         return {

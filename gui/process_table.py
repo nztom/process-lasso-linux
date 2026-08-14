@@ -115,21 +115,22 @@ class ProcessTable(QTableWidget):
     available_users_changed = pyqtSignal(list)
 
     COLUMNS = [
-        "PID", "Name", "User", "Sudo", "CPU%", "Mem(MB)",
+        "PID", "Name", "User", "Sudo", "CPU%", "RAM (MB)",
+        "GPU%", "GPU Mem (MB)",
         "CPU Priority (current)", "CPU Priority (always)",
         "CPU Affinity (current)", "CPU Affinity (always)",
         "I/O Priority (current)", "I/O Priority (always)",
         "Status", "Command",
     ]
     SUDO_COLUMN = 3
-    NICE_CURRENT_COLUMN = 6
-    NICE_ALWAYS_COLUMN = 7
-    AFFINITY_CURRENT_COLUMN = 8
-    AFFINITY_ALWAYS_COLUMN = 9
-    IONICE_CURRENT_COLUMN = 10
-    IONICE_ALWAYS_COLUMN = 11
-    STATUS_COLUMN = 12
-    COMMAND_COLUMN = 13
+    NICE_CURRENT_COLUMN = 8
+    NICE_ALWAYS_COLUMN = 9
+    AFFINITY_CURRENT_COLUMN = 10
+    AFFINITY_ALWAYS_COLUMN = 11
+    IONICE_CURRENT_COLUMN = 12
+    IONICE_ALWAYS_COLUMN = 13
+    STATUS_COLUMN = 14
+    COMMAND_COLUMN = 15
     DEFAULT_HIDDEN_COLUMNS = {SUDO_COLUMN, COMMAND_COLUMN}
     DEFAULT_COLUMN_WIDTHS = {
         0: 72,    # PID
@@ -138,14 +139,16 @@ class ProcessTable(QTableWidget):
         3: 60,    # Sudo
         4: 70,    # CPU%
         5: 85,    # Mem(MB)
-        6: 145,   # CPU Priority (current)
-        7: 145,   # CPU Priority (always)
-        8: 145,   # CPU Affinity (current)
-        9: 145,   # CPU Affinity (always)
-        10: 135,  # I/O Priority (current)
-        11: 135,  # I/O Priority (always)
-        12: 110,  # Status
-        13: 360,  # Command
+        6: 70,    # GPU%
+        7: 110,   # GPU Mem (MB)
+        8: 145,   # CPU Priority (current)
+        9: 145,   # CPU Priority (always)
+        10: 145,  # CPU Affinity (current)
+        11: 145,  # CPU Affinity (always)
+        12: 135,  # I/O Priority (current)
+        13: 135,  # I/O Priority (always)
+        14: 110,  # Status
+        15: 360,  # Command
     }
 
     def __init__(self, rule_engine, log_callback, parent=None, thread_provider=None):
@@ -239,7 +242,7 @@ class ProcessTable(QTableWidget):
             self._sort_asc = not self._sort_asc
         else:
             self._sort_col = col
-            self._sort_asc = col not in (4, 5)  # CPU/Mem default desc
+            self._sort_asc = col not in (4, 5, 6, 7)  # Metrics default desc
         self._update_header_labels()
         self._refresh_display()
 
@@ -331,14 +334,16 @@ class ProcessTable(QTableWidget):
             3: lambda p: p.get("sudo", False),
             4: lambda p: p["cpu_percent"],
             5: lambda p: p["mem_rss"],
-            6: lambda p: p["nice"],
-            7: lambda p: format_nice_policy(effective_policy(p).nice),
-            8: lambda p: p["affinity"],
-            9: lambda p: effective_policy(p).affinity or "",
-            10: lambda p: p["ionice"],
-            11: lambda p: format_io_priority_policy(effective_policy(p).ionice),
-            12: lambda p: "game" if isinstance(p, ProcessPolicyView) and p.is_game else "",
-            13: lambda p: p.get("cmdline", "").lower(),
+            6: lambda p: p.get("gpu_percent", 0.0),
+            7: lambda p: p.get("gpu_mem", 0),
+            8: lambda p: p["nice"],
+            9: lambda p: format_nice_policy(effective_policy(p).nice),
+            10: lambda p: p["affinity"],
+            11: lambda p: effective_policy(p).affinity or "",
+            12: lambda p: p["ionice"],
+            13: lambda p: format_io_priority_policy(effective_policy(p).ionice),
+            14: lambda p: "game" if isinstance(p, ProcessPolicyView) and p.is_game else "",
+            15: lambda p: p.get("cmdline", "").lower(),
         }
         key_fn = key_map.get(self._sort_col, lambda p: 0)
         try:
@@ -391,6 +396,8 @@ class ProcessTable(QTableWidget):
                 "Yes" if proc.get("sudo", False) else "",
                 f"{cpu:.1f}",
                 f"{proc['mem_rss'] / 1_048_576:.1f}",
+                f"{proc.get('gpu_percent', 0.0):.1f}" if proc.get("gpu_percent", 0.0) else "",
+                f"{proc.get('gpu_mem', 0) / 1_048_576:.1f}" if proc.get("gpu_mem", 0) else "",
                 str(proc["nice"]),
                 format_nice_policy(policy.nice),
                 proc.get("affinity", ""),
@@ -451,6 +458,8 @@ class ProcessTable(QTableWidget):
             proc.get("user", ""),
             "",
             "" if thread.cpu_percent is None else f"{thread.cpu_percent:.1f}",
+            "",
+            "",
             "",
             str(thread.nice),
             "",
@@ -680,7 +689,16 @@ class ProcessTable(QTableWidget):
 
     def _do_set_affinity(self, proc: ProcessPolicyView):
         observed = proc.observed
-        dlg = AffinityDialog(observed.affinity, self, observed.name)
+        aggregate = utils.get_aggregate_affinity_str(
+            observed.pid, observed.affinity
+        )
+        summary = (
+            f"{observed.affinity} ({aggregate})"
+            if aggregate != observed.affinity else observed.affinity
+        )
+        dlg = AffinityDialog(
+            aggregate, self, observed.name, current_summary=summary
+        )
         if dlg.exec() == AffinityDialog.DialogCode.Accepted:
             cpulist = dlg.get_cpulist()
             if utils.set_affinity(observed.pid, cpulist):
@@ -771,7 +789,16 @@ class ProcessTable(QTableWidget):
 
     def _do_add_affinity_rule(self, proc: ProcessPolicyView):
         observed = proc.observed
-        dlg = AffinityDialog(observed.affinity, self, observed.name)
+        aggregate = utils.get_aggregate_affinity_str(
+            observed.pid, observed.affinity
+        )
+        summary = (
+            f"{observed.affinity} ({aggregate})"
+            if aggregate != observed.affinity else observed.affinity
+        )
+        dlg = AffinityDialog(
+            aggregate, self, observed.name, current_summary=summary
+        )
         if dlg.exec() == AffinityDialog.DialogCode.Accepted:
             self._emit_always_rule(
                 proc, "CPU Affinity", affinity=dlg.get_cpulist()

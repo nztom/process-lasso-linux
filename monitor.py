@@ -14,6 +14,7 @@ from rules import RuleEngine
 from probalance import ProBalance
 from process_info import ProcessInfo, ProcessPolicyView, ProcessSnapshot
 from runtime_cleanup import ProcessRuntimeCleanup
+from gpu_memory import NvidiaGpuMemorySampler
 import utils
 
 log = logging.getLogger(__name__)
@@ -126,6 +127,8 @@ def _safe_proc_identity(proc: psutil.Process) -> ProcessInfo | None:
                 "sudo": sudo,
                 "cpu_percent": 0.0,
                 "mem_rss": 0,
+                "gpu_percent": 0.0,
+                "gpu_mem": 0,
                 "nice": nice,
                 "affinity": "",
                 "ionice": "",
@@ -213,6 +216,7 @@ class MonitorThread(QThread):
         self._known_tids_by_pid: dict[int, set[int]] = {}
         self._manually_overridden_pids: set[int] = set()
         self._process_cache: dict[int, ProcessInfo] = {}
+        self._gpu_memory = NvidiaGpuMemorySampler()
 
         # Track original affinity before we change it for internal restoration.
         # pid → frozenset of CPU numbers that were online when we first touched the process.
@@ -548,6 +552,11 @@ class MonitorThread(QThread):
                     proc = by_pid.get(pid)
                     if proc is not None:
                         _update_proc_metrics(proc, info, include_details=snapshot_due)
+            if snapshot_due:
+                gpu_percent, gpu_memory = self._gpu_memory.sample()
+                for pid, info in self._process_cache.items():
+                    info["gpu_percent"] = gpu_percent.get(pid, 0.0)
+                    info["gpu_mem"] = gpu_memory.get(pid, 0)
             # Avoid allocating a full immutable snapshot on enforcement-only
             # passes. ProBalance and the GUI are its only consumers.
             if pb_due or snapshot_due:
@@ -593,3 +602,4 @@ class MonitorThread(QThread):
             log.exception("MonitorThread: unexpected error in main loop: %s", exc)
             # Keep error back-off interruptible for shutdown and settings saves.
             self._wait_for_wake(1.0)
+        self._gpu_memory.close()

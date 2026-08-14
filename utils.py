@@ -92,6 +92,18 @@ def get_affinity_str(pid: int) -> str:
         return ""
 
 
+def get_aggregate_affinity_str(pid: int, fallback: str = "") -> str:
+    """Return the union of the live affinity masks for every process thread."""
+    aggregate: set[int] = set()
+    for tid in get_process_tids(pid):
+        try:
+            aggregate.update(os.sched_getaffinity(tid))
+        except (PermissionError, ProcessLookupError, OSError):
+            # A thread may exit between listing /proc/<pid>/task and this read.
+            continue
+    return _cpuset_to_cpulist(aggregate) if aggregate else fallback
+
+
 def _cpuset_to_cpulist(cpus: set[int]) -> str:
     """Convert {0,1,2,3,5} → '0-3,5'."""
     if not cpus:

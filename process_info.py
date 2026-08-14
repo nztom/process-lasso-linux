@@ -36,6 +36,8 @@ class ProcessInfo(TypedDict):
     affinity: str
     ionice: str
     cmdline: str
+    gpu_percent: float
+    gpu_mem: int
 
 
 @dataclass(frozen=True)
@@ -58,10 +60,13 @@ class ProcessSnapshot(Mapping[str, object]):
     affinity: str
     ionice: str
     cmdline: str
+    gpu_percent: float = 0.0
+    gpu_mem: int = 0
 
     _FIELDS: ClassVar[tuple[str, ...]] = (
         "pid", "create_time", "comm", "name", "user", "sudo",
-        "cpu_percent", "mem_rss", "nice", "affinity", "ionice", "cmdline",
+        "cpu_percent", "mem_rss", "gpu_percent", "gpu_mem", "nice",
+        "affinity", "ionice", "cmdline",
     )
 
     @classmethod
@@ -76,6 +81,8 @@ class ProcessSnapshot(Mapping[str, object]):
             sudo=info["sudo"],
             cpu_percent=info["cpu_percent"],
             mem_rss=info["mem_rss"],
+            gpu_percent=info.get("gpu_percent", 0.0),
+            gpu_mem=info.get("gpu_mem", 0),
             nice=info["nice"],
             affinity=info["affinity"],
             ionice=info["ionice"],
@@ -95,6 +102,8 @@ class ProcessSnapshot(Mapping[str, object]):
             sudo=bool(info.get("sudo", False)),
             cpu_percent=float(info.get("cpu_percent", 0.0)),
             mem_rss=int(info.get("mem_rss", 0)),
+            gpu_percent=float(info.get("gpu_percent", 0.0)),
+            gpu_mem=int(info.get("gpu_mem", 0)),
             nice=int(info.get("nice", 0)),
             affinity=str(info.get("affinity", "")),
             ionice=str(info.get("ionice", "")),

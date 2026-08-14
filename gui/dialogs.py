@@ -18,7 +18,8 @@ import utils
 class AffinityDialog(QDialog):
     """CPU affinity picker: topology-aware checkbox grid."""
 
-    def __init__(self, current_affinity: str = "", parent=None, title_suffix: str = ""):
+    def __init__(self, current_affinity: str = "", parent=None,
+                 title_suffix: str = "", current_summary: str = ""):
         super().__init__(parent)
         self.setWindowTitle(f"Set CPU Affinity{' — ' + title_suffix if title_suffix else ''}")
         # Always use total CPU count (present), not just online count
@@ -26,13 +27,18 @@ class AffinityDialog(QDialog):
         self._cpu_info = cpu_tools.get_cpu_info()
         self._cpu_count = self._cpu_info.cpu_count
         self._checkboxes: list[QCheckBox] = []
-        self._build_ui(current_affinity)
+        self._build_ui(current_affinity, current_summary)
         self.setMinimumWidth(520)
         self.adjustSize()
 
-    def _build_ui(self, current_affinity: str):
+    def _build_ui(self, current_affinity: str, current_summary: str = ""):
         layout = QVBoxLayout(self)
         selected = self._parse_cpulist(current_affinity)
+
+        if current_summary:
+            current = QLabel(f"Current affinity: {current_summary}")
+            current.setWordWrap(True)
+            layout.addWidget(current)
 
         # Gather topology info for CCD-aware display
         try:

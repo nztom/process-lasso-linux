@@ -12,6 +12,30 @@ import utils
 
 
 class SetNiceTests(unittest.TestCase):
+    @mock.patch("utils.os.sched_getaffinity")
+    @mock.patch("utils.get_process_tids", return_value=[100, 101, 102])
+    def test_aggregate_affinity_unions_all_live_thread_masks(
+        self, _get_tids, get_affinity
+    ):
+        get_affinity.side_effect = [{0}, {0, 1, 2}, {6, 7}]
+
+        aggregate = utils.get_aggregate_affinity_str(100, "0")
+
+        self.assertEqual(aggregate, "0-2,6-7")
+
+    @mock.patch("utils.os.sched_getaffinity")
+    @mock.patch("utils.get_process_tids", return_value=[100, 101])
+    def test_aggregate_affinity_ignores_threads_that_exit_during_read(
+        self, _get_tids, get_affinity
+    ):
+        get_affinity.side_effect = [{0, 1}, ProcessLookupError]
+
+        self.assertEqual(utils.get_aggregate_affinity_str(100, "4-7"), "0-1")
+
+    @mock.patch("utils.get_process_tids", return_value=[])
+    def test_aggregate_affinity_falls_back_when_process_has_exited(self, _get_tids):
+        self.assertEqual(utils.get_aggregate_affinity_str(100, "4-7"), "4-7")
+
     @mock.patch("utils.os.listdir", side_effect=FileNotFoundError)
     def test_missing_process_has_no_threads(self, listdir):
         self.assertEqual(utils.get_process_tids(1234), [])
