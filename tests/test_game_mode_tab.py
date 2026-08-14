@@ -105,12 +105,23 @@ class GameModeTabTests(unittest.TestCase):
         self.assertIn("combine aliases", merge.toolTip())
 
     def test_indicator_changes_when_game_mode_becomes_inactive(self):
+        self.assertTrue(self.tab._session_flash_pending)
+        initial_generation = self.tab._session_flash_generation
         self.tab._sessions.sessions.clear()
 
         self.tab.refresh()
 
         self.assertEqual(self.tab._mode_indicator.text(), "○ Game Mode inactive")
         self.assertNotIn("#22ff66", self.tab._mode_indicator.styleSheet())
+        self.assertFalse(self.tab._session_flash_pending)
+
+        with mock.patch.object(
+            self.tab, "_can_show_session_flash", return_value=True
+        ):
+            self.tab._consume_pending_session_flash()
+
+        self.assertEqual(self.tab._session_flash_generation, initial_generation)
+        self.assertNotIn("#22ff66", self.tab._active_heading.styleSheet())
 
     def test_new_session_flash_only_triggers_once_per_session_token(self):
         initial_generation = self.tab._session_flash_generation

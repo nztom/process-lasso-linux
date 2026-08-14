@@ -360,6 +360,9 @@ class GameModeTab(QWidget):
                 "color: #22ff66; font-weight: 800; padding: 4px 0;"
             )
         else:
+            # A hidden tab may have queued a flash for a session that has since
+            # ended. Do not replay that stale notification when the tab opens.
+            self._session_flash_pending = False
             self._mode_indicator.setText("○ Game Mode inactive")
             self._mode_indicator.setStyleSheet(
                 "color: rgba(205,214,244,0.65); font-weight: 600; padding: 4px 0;"
