@@ -9,6 +9,12 @@ from pathlib import Path
 CONFIG_DIR = Path.home() / ".config" / "process-lasso"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
+DEFAULT_GAME_ENVIRONMENT = [
+    "__NV_PRIME_RENDER_OFFLOAD=1",
+    "__GLX_VENDOR_LIBRARY_NAME=nvidia",
+    "__VK_LAYER_NV_optimus=NVIDIA_only",
+]
+
 DEFAULT_CONFIG = {
     "version": 2,
     "rules": [],
@@ -44,6 +50,7 @@ DEFAULT_CONFIG = {
         "ccd_preference": "cache",
         "affinity": None,
         "nice": None,
+        "environment": DEFAULT_GAME_ENVIRONMENT,
         "games": [],
     },
 }
@@ -68,6 +75,7 @@ def _compact_cpulist(cpus: set[int]) -> str | None:
 def _initialize_game_mode_defaults(config: dict) -> dict:
     """Populate hardware-aware defaults once, preserving later user choices."""
     game_mode = config.setdefault("game_mode", {})
+    game_mode.setdefault("environment", copy.deepcopy(DEFAULT_GAME_ENVIRONMENT))
     if game_mode.get("defaults_initialized", False):
         return config
     try:
@@ -106,8 +114,9 @@ def load() -> dict:
             needs_game_defaults = not merged.get("game_mode", {}).get(
                 "defaults_initialized", False
             )
+            needs_game_environment = "environment" not in data.get("game_mode", {})
             merged = _initialize_game_mode_defaults(merged)
-            if needs_game_defaults:
+            if needs_game_defaults or needs_game_environment:
                 save(merged)
             return merged
         except (json.JSONDecodeError, OSError):

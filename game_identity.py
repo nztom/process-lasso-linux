@@ -150,7 +150,11 @@ class GameCatalog:
 
 
 def effective_policy(game_config: dict, identity: LaunchIdentity | None) -> dict:
-    result = {"affinity": game_config.get("affinity"), "nice": game_config.get("nice")}
+    result = {
+        "affinity": game_config.get("affinity"),
+        "nice": game_config.get("nice"),
+        "environment": list(game_config.get("environment", [])),
+    }
     if identity:
         if identity.affinity != "inherit":
             result["affinity"] = None if identity.affinity == "disabled" else identity.affinity

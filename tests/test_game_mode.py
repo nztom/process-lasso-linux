@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import json
+import tempfile
 import unittest
 from unittest import mock
 
@@ -41,6 +43,7 @@ class GameIdentityTests(unittest.TestCase):
                                                 {"type": "offset", "offset": 2})
         self.assertEqual(game_identity.effective_policy(cfg, identity), {
             "affinity": None, "nice": {"type": "offset", "offset": 2},
+            "environment": [],
         })
 
 
@@ -54,15 +57,44 @@ class GameModeDefaultTests(unittest.TestCase):
         self.assertEqual(game_mode_config["nice"], {
             "type": "absolute", "value": -1,
         })
+        self.assertEqual(game_mode_config["environment"], [
+            "__NV_PRIME_RENDER_OFFLOAD=1",
+            "__GLX_VENDOR_LIBRARY_NAME=nvidia",
+            "__VK_LAYER_NV_optimus=NVIDIA_only",
+        ])
         self.assertTrue(game_mode_config["defaults_initialized"])
 
     @mock.patch("cpu_tools.get_cpu_info")
     def test_initialized_defaults_preserve_explicitly_disabled_fields(self, cpu_info):
         loaded = config._initialize_game_mode_defaults({"game_mode": {
             "defaults_initialized": True, "affinity": None, "nice": None,
+            "environment": [],
         }})
         self.assertIsNone(loaded["game_mode"]["affinity"])
         self.assertIsNone(loaded["game_mode"]["nice"])
+        self.assertEqual(loaded["game_mode"]["environment"], [])
+        cpu_info.assert_not_called()
+
+    @mock.patch("cpu_tools.get_cpu_info")
+    def test_existing_config_persists_new_environment_defaults(self, cpu_info):
+        cpu_info.return_value.topology.preferred = set()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = os.path.join(temp_dir, "config.json")
+            with open(config_file, "w") as handle:
+                json.dump({
+                    "version": 2,
+                    "game_mode": {"defaults_initialized": True},
+                }, handle)
+            with mock.patch.object(config, "CONFIG_DIR", config.Path(temp_dir)), \
+                    mock.patch.object(config, "CONFIG_FILE", config.Path(config_file)):
+                loaded = config.load()
+                with open(config_file) as handle:
+                    persisted = json.load(handle)
+
+        self.assertEqual(
+            persisted["game_mode"]["environment"],
+            loaded["game_mode"]["environment"],
+        )
         cpu_info.assert_not_called()
 
 
@@ -103,13 +135,28 @@ class GameSessionPreferenceTests(unittest.TestCase):
     @mock.patch("process_lasso_game.apply_launch_policy", return_value=[])
     @mock.patch("process_lasso_game._request")
     def test_wrapper_preserves_exact_argv_and_existing_environment(self, request, apply, execvp):
-        request.return_value = {"ok": True, "token": "abc", "policy": {}}
+        policy = {"environment": [
+            "__NV_PRIME_RENDER_OFFLOAD=1",
+            "__GLX_VENDOR_LIBRARY_NAME=nvidia",
+            "__VK_LAYER_NV_optimus=NVIDIA_only",
+        ]}
+        request.return_value = {"ok": True, "token": "abc", "policy": policy}
         with mock.patch.dict(os.environ, {"LD_PRELOAD": "libexample.so"}, clear=True):
             process_lasso_game.main(["--", "command", "a b", "--flag"])
             self.assertEqual(os.environ["LD_PRELOAD"], "libexample.so")
             self.assertEqual(os.environ[game_mode.MARKER_ENV], "abc")
+            self.assertEqual(os.environ["__NV_PRIME_RENDER_OFFLOAD"], "1")
+            self.assertEqual(os.environ["__GLX_VENDOR_LIBRARY_NAME"], "nvidia")
+            self.assertEqual(os.environ["__VK_LAYER_NV_optimus"], "NVIDIA_only")
         execvp.assert_called_once_with("command", ["command", "a b", "--flag"])
-        apply.assert_called_once_with(os.getpid(), {})
+        apply.assert_called_once_with(os.getpid(), policy)
+
+    def test_environment_assignment_validation(self):
+        self.assertEqual(game_mode.parse_environment_assignments([
+            "GPU=discrete", "VALUE=a=b", "EMPTY=",
+        ]), {"GPU": "discrete", "VALUE": "a=b", "EMPTY": ""})
+        with self.assertRaises(ValueError):
+            game_mode.parse_environment_assignments(["NOT AN ASSIGNMENT"])
 
 
 if __name__ == "__main__":

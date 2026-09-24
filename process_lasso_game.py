@@ -12,7 +12,12 @@ import time
 
 import psutil
 
-from game_mode import MARKER_ENV, apply_launch_policy, socket_path
+from game_mode import (
+    MARKER_ENV,
+    apply_launch_policy,
+    parse_environment_assignments,
+    socket_path,
+)
 
 
 def _request(argv, profile=None):
@@ -55,8 +60,16 @@ def main(arguments=None):
         parser.error("COMMAND is required")
     response = _request(command, args.profile)
     if response.get("ok"):
-        for error in apply_launch_policy(os.getpid(), response.get("policy", {})):
+        policy = response.get("policy", {})
+        for error in apply_launch_policy(os.getpid(), policy):
             print(f"processlasso-game: {error}", file=sys.stderr)
+        try:
+            os.environ.update(parse_environment_assignments(
+                policy.get("environment", [])
+            ))
+        except ValueError as exc:
+            print(f"processlasso-game: {exc}; ignoring environment overrides",
+                  file=sys.stderr)
         os.environ[MARKER_ENV] = response["token"]
     else:
         print(f"processlasso-game: {response.get('error', 'activation failed')}; launching normally",

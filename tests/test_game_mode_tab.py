@@ -8,7 +8,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QDialog, QPushButton
+from PyQt6.QtWidgets import QApplication, QDialog, QLabel, QPushButton
 
 from gui.game_mode_tab import GameModeTab, RunningGameProfileDialog
 
@@ -39,7 +39,8 @@ class GameModeTabTests(unittest.TestCase):
             "argv": ["gamemoderun", "SpaceGame.exe"],
         }
         self.config = {"ccd_preference": "cache", "affinity": None,
-                       "nice": None, "games": [self.game]}
+                       "nice": None, "environment": ["GPU=discrete"],
+                       "games": [self.game]}
         self.tab = GameModeTab(
             self.config, SimpleNamespace(sessions={"session-1": self.session})
         )
@@ -184,6 +185,28 @@ class GameModeTabTests(unittest.TestCase):
 
         self.assertIsNone(self.config["ccd_preference"])
         self.assertEqual(len(emissions), 1)
+
+    def test_default_environment_is_saved(self):
+        self.tab._environment.setPlainText("GPU=nvidia\nEMPTY=")
+        emissions = []
+        self.tab.settings_changed.connect(emissions.append)
+
+        self.tab._apply()
+
+        self.assertEqual(self.config["environment"], ["GPU=nvidia", "EMPTY="])
+        self.assertEqual(len(emissions), 1)
+
+    def test_environment_field_uses_game_label(self):
+        labels = [label.text() for label in self.tab.findChildren(QLabel)]
+        self.assertIn("Game environment", labels)
+        self.assertNotIn("Default environment", labels)
+
+    def test_game_mode_defaults_button_is_named_save(self):
+        button_texts = [
+            button.text() for button in self.tab.findChildren(QPushButton)
+        ]
+        self.assertIn("Save", button_texts)
+        self.assertNotIn("Apply Game Mode defaults", button_texts)
 
     def test_running_game_dialog_writes_canonical_profile_overrides(self):
         dialog = RunningGameProfileDialog(self.game)

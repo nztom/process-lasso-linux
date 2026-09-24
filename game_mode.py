@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import struct
 import threading
@@ -17,6 +18,18 @@ import utils
 MARKER_ENV = "PROCESS_LASSO_GAME_SESSION"
 SOCKET_NAME = "process-lasso-game.sock"
 STATE_NAME = "process-lasso-game-sessions.json"
+ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def parse_environment_assignments(assignments) -> dict[str, str]:
+    """Validate ``NAME=value`` entries and return launch environment overrides."""
+    result = {}
+    for assignment in assignments or []:
+        name, separator, value = str(assignment).partition("=")
+        if not separator or not ENVIRONMENT_NAME.fullmatch(name):
+            raise ValueError(f"invalid environment assignment: {assignment}")
+        result[name] = value
+    return result
 
 
 def runtime_dir() -> Path:

@@ -5,10 +5,11 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QComboBox, QLineEdit, QTableWidget,
     QTableWidgetItem, QLabel, QPushButton, QHBoxLayout, QDialog,
-    QDialogButtonBox, QMessageBox, QAbstractItemView,
+    QDialogButtonBox, QMessageBox, QAbstractItemView, QPlainTextEdit,
 )
 from gui.dialogs import AffinityDialog, NicePriorityDialog
 import cpu_tools
+from game_mode import parse_environment_assignments
 
 
 class RunningGameProfileDialog(QDialog):
@@ -196,6 +197,13 @@ class GameModeTab(QWidget):
         self._nice = QLineEdit(self._nice_text(game_config.get("nice")))
         self._nice.setReadOnly(True)
         self._nice.setPlaceholderText("Disabled; integer or offset:+5")
+        self._environment = QPlainTextEdit()
+        self._environment.setPlainText("\n".join(game_config.get("environment", [])))
+        self._environment.setPlaceholderText("One NAME=value assignment per line")
+        self._environment.setMaximumHeight(90)
+        self._environment.setToolTip(
+            "Environment variables applied by processlasso-game before the game starts."
+        )
         affinity_row = QHBoxLayout()
         affinity_row.addWidget(self._affinity)
         affinity_pick = QPushButton("Pick CPUs…")
@@ -215,8 +223,9 @@ class GameModeTab(QWidget):
         form.addRow("Game Mode CCD preference", self._ccd)
         form.addRow("Default game affinity", affinity_row)
         form.addRow("Default nice policy", nice_row)
+        form.addRow("Game environment", self._environment)
         layout.addLayout(form)
-        save = QPushButton("Apply Game Mode defaults")
+        save = QPushButton("Save")
         save.clicked.connect(self._apply)
         layout.addWidget(save)
 
@@ -300,6 +309,16 @@ class GameModeTab(QWidget):
             self._config["nice"] = self._parse_nice(self._nice.text())
         except ValueError:
             return
+        environment = [
+            line.strip() for line in self._environment.toPlainText().splitlines()
+            if line.strip()
+        ]
+        try:
+            parse_environment_assignments(environment)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Game Mode Environment", str(exc))
+            return
+        self._config["environment"] = environment
         self.settings_changed.emit(self._config)
 
     def _pick_default_affinity(self):
