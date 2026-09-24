@@ -39,7 +39,8 @@ class GameModeTabTests(unittest.TestCase):
             "argv": ["gamemoderun", "SpaceGame.exe"],
         }
         self.config = {"ccd_preference": "cache", "affinity": None,
-                       "nice": None, "environment": ["GPU=discrete"],
+                       "nice": None, "wrappers": [],
+                       "environment": ["GPU=discrete"],
                        "games": [self.game]}
         self.tab = GameModeTab(
             self.config, SimpleNamespace(sessions={"session-1": self.session})
@@ -194,6 +195,18 @@ class GameModeTabTests(unittest.TestCase):
         self.tab._apply()
 
         self.assertEqual(self.config["environment"], ["GPU=nvidia", "EMPTY="])
+        self.assertEqual(len(emissions), 1)
+
+    def test_launch_wrappers_are_saved_in_displayed_order(self):
+        self.tab._wrappers.setPlainText("gamemoderun\nmangohud --dlsym")
+        emissions = []
+        self.tab.settings_changed.connect(emissions.append)
+
+        self.tab._apply()
+
+        self.assertEqual(
+            self.config["wrappers"], ["gamemoderun", "mangohud --dlsym"]
+        )
         self.assertEqual(len(emissions), 1)
 
     def test_environment_field_uses_game_label(self):

@@ -50,6 +50,7 @@ DEFAULT_CONFIG = {
         "ccd_preference": "cache",
         "affinity": None,
         "nice": None,
+        "wrappers": [],
         "environment": DEFAULT_GAME_ENVIRONMENT,
         "games": [],
     },
@@ -75,6 +76,7 @@ def _compact_cpulist(cpus: set[int]) -> str | None:
 def _initialize_game_mode_defaults(config: dict) -> dict:
     """Populate hardware-aware defaults once, preserving later user choices."""
     game_mode = config.setdefault("game_mode", {})
+    game_mode.setdefault("wrappers", [])
     game_mode.setdefault("environment", copy.deepcopy(DEFAULT_GAME_ENVIRONMENT))
     if game_mode.get("defaults_initialized", False):
         return config
@@ -115,8 +117,9 @@ def load() -> dict:
                 "defaults_initialized", False
             )
             needs_game_environment = "environment" not in data.get("game_mode", {})
+            needs_game_wrappers = "wrappers" not in data.get("game_mode", {})
             merged = _initialize_game_mode_defaults(merged)
-            if needs_game_defaults or needs_game_environment:
+            if needs_game_defaults or needs_game_environment or needs_game_wrappers:
                 save(merged)
             return merged
         except (json.JSONDecodeError, OSError):

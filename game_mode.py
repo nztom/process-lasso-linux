@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import socket
 import struct
 import threading
@@ -29,6 +30,20 @@ def parse_environment_assignments(assignments) -> dict[str, str]:
         if not separator or not ENVIRONMENT_NAME.fullmatch(name):
             raise ValueError(f"invalid environment assignment: {assignment}")
         result[name] = value
+    return result
+
+
+def parse_wrapper_commands(commands) -> list[str]:
+    """Parse ordered wrapper command lines into an argv prefix without a shell."""
+    result = []
+    for command in commands or []:
+        try:
+            arguments = shlex.split(str(command), posix=True)
+        except ValueError as exc:
+            raise ValueError(f"invalid launch wrapper: {command}: {exc}") from exc
+        if not arguments:
+            raise ValueError("launch wrappers cannot be blank")
+        result.extend(arguments)
     return result
 
 

@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 )
 from gui.dialogs import AffinityDialog, NicePriorityDialog
 import cpu_tools
-from game_mode import parse_environment_assignments
+from game_mode import parse_environment_assignments, parse_wrapper_commands
 
 
 class RunningGameProfileDialog(QDialog):
@@ -197,6 +197,13 @@ class GameModeTab(QWidget):
         self._nice = QLineEdit(self._nice_text(game_config.get("nice")))
         self._nice.setReadOnly(True)
         self._nice.setPlaceholderText("Disabled; integer or offset:+5")
+        self._wrappers = QPlainTextEdit()
+        self._wrappers.setPlainText("\n".join(game_config.get("wrappers", [])))
+        self._wrappers.setPlaceholderText("One wrapper command per line, such as gamemoderun")
+        self._wrappers.setMaximumHeight(90)
+        self._wrappers.setToolTip(
+            "Commands prepended in order before the game; the first line is outermost."
+        )
         self._environment = QPlainTextEdit()
         self._environment.setPlainText("\n".join(game_config.get("environment", [])))
         self._environment.setPlaceholderText("One NAME=value assignment per line")
@@ -223,6 +230,7 @@ class GameModeTab(QWidget):
         form.addRow("Game Mode CCD preference", self._ccd)
         form.addRow("Default game affinity", affinity_row)
         form.addRow("Default nice policy", nice_row)
+        form.addRow("Launch wrappers (outermost first)", self._wrappers)
         form.addRow("Game environment", self._environment)
         layout.addLayout(form)
         save = QPushButton("Save")
@@ -309,6 +317,16 @@ class GameModeTab(QWidget):
             self._config["nice"] = self._parse_nice(self._nice.text())
         except ValueError:
             return
+        wrappers = [
+            line.strip() for line in self._wrappers.toPlainText().splitlines()
+            if line.strip()
+        ]
+        try:
+            parse_wrapper_commands(wrappers)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Launch Wrapper", str(exc))
+            return
+        self._config["wrappers"] = wrappers
         environment = [
             line.strip() for line in self._environment.toPlainText().splitlines()
             if line.strip()

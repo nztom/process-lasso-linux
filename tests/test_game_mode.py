@@ -43,7 +43,7 @@ class GameIdentityTests(unittest.TestCase):
                                                 {"type": "offset", "offset": 2})
         self.assertEqual(game_identity.effective_policy(cfg, identity), {
             "affinity": None, "nice": {"type": "offset", "offset": 2},
-            "environment": [],
+            "wrappers": [], "environment": [],
         })
 
 
@@ -57,6 +57,7 @@ class GameModeDefaultTests(unittest.TestCase):
         self.assertEqual(game_mode_config["nice"], {
             "type": "absolute", "value": -1,
         })
+        self.assertEqual(game_mode_config["wrappers"], [])
         self.assertEqual(game_mode_config["environment"], [
             "__NV_PRIME_RENDER_OFFLOAD=1",
             "__GLX_VENDOR_LIBRARY_NAME=nvidia",
@@ -68,15 +69,16 @@ class GameModeDefaultTests(unittest.TestCase):
     def test_initialized_defaults_preserve_explicitly_disabled_fields(self, cpu_info):
         loaded = config._initialize_game_mode_defaults({"game_mode": {
             "defaults_initialized": True, "affinity": None, "nice": None,
-            "environment": [],
+            "wrappers": [], "environment": [],
         }})
         self.assertIsNone(loaded["game_mode"]["affinity"])
         self.assertIsNone(loaded["game_mode"]["nice"])
+        self.assertEqual(loaded["game_mode"]["wrappers"], [])
         self.assertEqual(loaded["game_mode"]["environment"], [])
         cpu_info.assert_not_called()
 
     @mock.patch("cpu_tools.get_cpu_info")
-    def test_existing_config_persists_new_environment_defaults(self, cpu_info):
+    def test_existing_config_persists_new_game_mode_defaults(self, cpu_info):
         cpu_info.return_value.topology.preferred = set()
         with tempfile.TemporaryDirectory() as temp_dir:
             config_file = os.path.join(temp_dir, "config.json")
@@ -95,6 +97,7 @@ class GameModeDefaultTests(unittest.TestCase):
             persisted["game_mode"]["environment"],
             loaded["game_mode"]["environment"],
         )
+        self.assertEqual(persisted["game_mode"]["wrappers"], [])
         cpu_info.assert_not_called()
 
 
@@ -139,7 +142,7 @@ class GameSessionPreferenceTests(unittest.TestCase):
             "__NV_PRIME_RENDER_OFFLOAD=1",
             "__GLX_VENDOR_LIBRARY_NAME=nvidia",
             "__VK_LAYER_NV_optimus=NVIDIA_only",
-        ]}
+        ], "wrappers": ["gamemoderun", "mangohud"]}
         request.return_value = {"ok": True, "token": "abc", "policy": policy}
         with mock.patch.dict(os.environ, {"LD_PRELOAD": "libexample.so"}, clear=True):
             process_lasso_game.main(["--", "command", "a b", "--flag"])
@@ -148,7 +151,11 @@ class GameSessionPreferenceTests(unittest.TestCase):
             self.assertEqual(os.environ["__NV_PRIME_RENDER_OFFLOAD"], "1")
             self.assertEqual(os.environ["__GLX_VENDOR_LIBRARY_NAME"], "nvidia")
             self.assertEqual(os.environ["__VK_LAYER_NV_optimus"], "NVIDIA_only")
-        execvp.assert_called_once_with("command", ["command", "a b", "--flag"])
+        request.assert_called_once_with(["command", "a b", "--flag"], None)
+        execvp.assert_called_once_with(
+            "gamemoderun",
+            ["gamemoderun", "mangohud", "command", "a b", "--flag"],
+        )
         apply.assert_called_once_with(os.getpid(), policy)
 
     def test_environment_assignment_validation(self):
@@ -157,6 +164,26 @@ class GameSessionPreferenceTests(unittest.TestCase):
         ]), {"GPU": "discrete", "VALUE": "a=b", "EMPTY": ""})
         with self.assertRaises(ValueError):
             game_mode.parse_environment_assignments(["NOT AN ASSIGNMENT"])
+
+    def test_wrapper_commands_preserve_order_and_support_arguments(self):
+        self.assertEqual(game_mode.parse_wrapper_commands([
+            "gamemoderun", "mangohud --dlsym", "env 'MODE=fast path'",
+        ]), ["gamemoderun", "mangohud", "--dlsym", "env", "MODE=fast path"])
+        with self.assertRaises(ValueError):
+            game_mode.parse_wrapper_commands(["mangohud '"])
+
+    @mock.patch("process_lasso_game.os.execvp")
+    @mock.patch("process_lasso_game.apply_launch_policy", return_value=[])
+    @mock.patch("process_lasso_game._request")
+    def test_invalid_wrapper_config_fails_open(self, request, _apply, execvp):
+        request.return_value = {
+            "ok": True, "token": "abc",
+            "policy": {"wrappers": ["mangohud '"]},
+        }
+
+        process_lasso_game.main(["game", "--flag"])
+
+        execvp.assert_called_once_with("game", ["game", "--flag"])
 
 
 if __name__ == "__main__":

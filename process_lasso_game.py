@@ -16,6 +16,7 @@ from game_mode import (
     MARKER_ENV,
     apply_launch_policy,
     parse_environment_assignments,
+    parse_wrapper_commands,
     socket_path,
 )
 
@@ -69,6 +70,11 @@ def main(arguments=None):
             ))
         except ValueError as exc:
             print(f"processlasso-game: {exc}; ignoring environment overrides",
+                  file=sys.stderr)
+        try:
+            command = parse_wrapper_commands(policy.get("wrappers", [])) + command
+        except ValueError as exc:
+            print(f"processlasso-game: {exc}; ignoring launch wrappers",
                   file=sys.stderr)
         os.environ[MARKER_ENV] = response["token"]
     else:

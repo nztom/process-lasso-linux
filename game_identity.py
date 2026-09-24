@@ -153,6 +153,7 @@ def effective_policy(game_config: dict, identity: LaunchIdentity | None) -> dict
     result = {
         "affinity": game_config.get("affinity"),
         "nice": game_config.get("nice"),
+        "wrappers": list(game_config.get("wrappers", [])),
         "environment": list(game_config.get("environment", [])),
     }
     if identity:
