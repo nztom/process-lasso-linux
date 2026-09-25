@@ -27,7 +27,8 @@ DEFAULT_CONFIG = {
     "version": 3,
     "process_policies": [],
     "cpu": {
-        # Applied to every process without an exact-name affinity policy.
+        # Applied to non-game processes without an Always affinity policy;
+        # Always nice and I/O-only policies still receive this default.
         # e.g. "8-15,24-31" pushes all background processes to CCD1 while
         # per-process policies can keep games on CCD0 (3D V-Cache die).
         # null = disabled.

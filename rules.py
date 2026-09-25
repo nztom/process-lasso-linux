@@ -386,7 +386,7 @@ class RuleEngine:
         self._priority_state.flush_if_due()
 
     def suppress_pid(self, pid: int, policy: str | None = None):
-        """Stop rules from overriding a manual process-policy change."""
+        """Suppress one manually changed policy field, or every field if omitted."""
         if policy not in {None, "affinity", "nice", "ionice_class"}:
             raise ValueError(f"unsupported suppressed policy: {policy}")
         for rule in self._rules:
@@ -438,7 +438,12 @@ class RuleEngine:
     def _apply_affinity_policy(
         self, pid: int, proc_name: str, tids: list[int] | None = None
     ) -> list[str]:
-        """Place new threads once, then selectively correct affinity drift."""
+        """Keep thread masks within an Always-policy boundary.
+
+        Narrower application-selected masks remain valid. Out-of-bounds masks
+        are intersected with the boundary, with bounded drift correction unless
+        the rule requests continuous force-apply behavior.
+        """
         rule = self._effective_affinity_rule(proc_name)
         if rule is None or (
             not rule.force_apply

@@ -174,6 +174,13 @@ class GameModeTab(QWidget):
         layout.addWidget(QLabel(
             "Usage: processlasso-game %command%"
         ))
+        policy_note = QLabel(
+            "Affinity and nice are applied once to the launch process and inherited "
+            "by the game. They are not continuously forced; use a process Always "
+            "policy for an ongoing affinity boundary or nice policy."
+        )
+        policy_note.setWordWrap(True)
+        layout.addWidget(policy_note)
         form = QFormLayout()
         self._ccd = QComboBox()
         self._ccd.addItem("Disabled", None)
@@ -194,9 +201,17 @@ class GameModeTab(QWidget):
         self._affinity = QLineEdit(game_config.get("affinity") or "")
         self._affinity.setReadOnly(True)
         self._affinity.setPlaceholderText("Disabled (example: 0-7,16-23)")
+        self._affinity.setToolTip(
+            "Exact launch mask inherited by wrappers and the game; Game Mode does "
+            "not prevent the game from changing thread masks later."
+        )
         self._nice = QLineEdit(self._nice_text(game_config.get("nice")))
         self._nice.setReadOnly(True)
         self._nice.setPlaceholderText("Disabled; integer or offset:+5")
+        self._nice.setToolTip(
+            "One-time launch nice value. Offsets use the wrapper's inherited nice "
+            "as their baseline and are clamped to the configured bounds."
+        )
         self._wrappers = QPlainTextEdit()
         self._wrappers.setPlainText("\n".join(game_config.get("wrappers", [])))
         self._wrappers.setPlaceholderText("One wrapper command per line, such as gamemoderun")

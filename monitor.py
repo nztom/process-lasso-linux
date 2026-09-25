@@ -244,8 +244,12 @@ class MonitorThread(QThread):
         self._wake_event.set()
 
     def reapply_all_defaults(self):
-        """Force re-apply default affinity to all currently known PIDs.
-        Called when the user changes the default affinity setting."""
+        """Reapply saved rules and eligible default affinity to known PIDs.
+
+        Default affinity coexists with saved non-affinity policies, but yields
+        to an Always affinity policy and does not alter active game sessions.
+        Called when the user changes the default affinity setting.
+        """
         default = self._default_affinity()
         for pid in list(self._known_pids):
             try:
@@ -354,7 +358,7 @@ class MonitorThread(QThread):
         return views
 
     def _apply_new_pid(self, info: ProcessInfo):
-        """Apply a saved process policy or the global default affinity."""
+        """Apply saved fields, plus default affinity when no affinity rule wins."""
         pid = info["pid"]
         name = info["name"]
         self._known_tids_by_pid.setdefault(pid, set(utils.get_process_tids(pid)))
@@ -382,7 +386,7 @@ class MonitorThread(QThread):
             session, int(info["pid"]), str(info["name"]))
 
     def _sync_new_threads(self):
-        """Apply policies to TIDs first observed on a global monitor pass."""
+        """Apply saved fields and eligible default affinity to newly seen TIDs."""
         default = self._default_affinity()
         for pid, info in list(self._process_cache.items()):
             matched = self._rule_engine.matches_process(info["name"])

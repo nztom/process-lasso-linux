@@ -335,7 +335,7 @@ class MainWindow(QMainWindow):
         self._config = updated_config
         self._game_sessions.config = self._config
         self._monitor.update_config(self._config)
-        # Re-apply default affinity to all currently running processes immediately
+        # Reapply saved policies and eligible default affinity immediately.
         self._monitor.reapply_all_defaults()
         self._save_config()
 

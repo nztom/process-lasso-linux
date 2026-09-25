@@ -29,7 +29,7 @@ class _ProcState:
 
 
 class ProBalance:
-    """Tracks per-process CPU usage and applies/reverts nice throttling."""
+    """Apply temporary nice throttling and retry restoration until it succeeds."""
 
     def __init__(self, config: dict, log_callback=None):
         self._cfg = config

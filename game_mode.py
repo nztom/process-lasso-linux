@@ -60,7 +60,12 @@ def socket_path() -> Path:
 
 
 def apply_launch_policy(pid: int, policy: dict) -> list[str]:
-    """Apply the shared launch policy and return non-fatal diagnostics."""
+    """Apply one-time launch policy and return non-fatal diagnostics.
+
+    Affinity is an exact verified write. An offset nice target is based on the
+    launch wrapper's current inherited nice value, then clamped. Both settings
+    are inherited across exec; Game Mode does not enforce them continuously.
+    """
     errors = []
     affinity = policy.get("affinity")
     if affinity and not utils.set_affinity(pid, affinity):

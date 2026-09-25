@@ -47,7 +47,9 @@ class SettingsTab(QWidget):
         cpu_layout = QVBoxLayout(cpu_group)
 
         desc = QLabel(
-            "Applied to every process without an Always affinity setting.\n"
+            "Applied to non-game processes without an Always affinity setting, "
+            "including those with Always priority or I/O settings. New threads "
+            "receive the same exact mask.\n"
             "Typical 7950X3D setup:\n"
             "  • Default → CCD1 (8-15,24-31)  — background processes\n"
             "  • Process Always affinity → CCD0 (0-7,16-23)\n"

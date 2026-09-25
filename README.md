@@ -34,9 +34,16 @@ processlasso-game %command%
 ```
 
 The wrapper asks the user service to resolve the Steam/native game identity,
-applies the inherited Game Mode affinity and nice policy, applies the configured
-launch wrappers and environment, and temporarily selects the configured AMD X3D
-CCD preference. Launch wrappers are blank by default; adding `gamemoderun` then
+applies the Game Mode affinity and nice policy once to the launch process,
+applies the configured launch wrappers and environment, and temporarily selects
+the configured AMD X3D CCD preference. The game and its initial threads inherit
+that exact launch affinity and nice value, but Game Mode does not continuously
+force either setting. An offset nice policy is calculated from the wrapper's
+inherited nice value and clamped to its configured floor and ceiling. The game
+may later change its own thread masks or priorities; use a process-level Always
+policy when an ongoing affinity boundary or nice policy is required.
+
+Launch wrappers are blank by default; adding `gamemoderun` then
 `mangohud` in the Game Mode tab runs games as
 `gamemoderun mangohud %command%` while Steam's launch option remains
 `processlasso-game %command%`. Remove matching wrappers from existing Steam
@@ -70,19 +77,29 @@ Game Mode screen is shown.
 - Multi-select with Shift/Ctrl+click; Delete key to kill selected processes
 - Column visibility toggle; cmdline tooltip on process name
 
-- Per-process Always affinity, CPU priority, and I/O priority are configured from the Processes tab and persist across restarts
+- Current affinity is an exact, verified write across the process's live threads;
+  Current priority actions likewise update the visible threads once
+- Always affinity is an allowed CPU boundary: narrower application-selected
+  thread masks are preserved, while masks extending outside the boundary are
+  constrained back inside it
+- A successful Current action suppresses only the corresponding Always field for
+  that process lifetime, so changing priority does not disable affinity enforcement
+- Per-process Always affinity, CPU priority, and I/O priority persist across restarts
 - **Visual CPU affinity picker** — topology-aware checkbox grid, no manual range typing required
 
 ### ProBalance tab
 - Automatically throttles CPU-hogging background processes when system load spikes
 - Configurable CPU threshold, throttle nice value, and cooldown period
 - Live count of currently throttled processes shown as a badge on the tab label
-- Restore original priority the moment load drops back to normal
+- Restore the original priority after load remains below the restore threshold;
+  failed restoration writes remain tracked and are retried
 
 ### Settings tab
 - Detected CPU topology
 - Current and configured AMD X3D scheduler preferred-CCD modes when supported
-- Default CPU affinity applied to all new processes
+- Default CPU affinity applied to current and newly discovered threads of
+  non-game processes without an Always affinity policy; Always priority and I/O
+  policies do not disable the default
 - Global monitor interval (0.5 s – 10 s)
 - Start minimized to tray on launch
 - `processlasso.service` systemd user-service autostart toggle (no root required)
@@ -123,6 +140,11 @@ systemctl --user status processlasso.service
 
 The process is named `processlasso` by default. To customize it, change
 `PROCESS_NAME` in `app_identity.py` and run the installer again.
+
+For exact Current, Always, default, Game Mode, nice-offset, and ProBalance
+behavior, see [Policy semantics](docs/policy-semantics.md). Runtime state owners
+and cleanup triggers are documented in
+[Runtime process-state ownership](docs/runtime-state-ownership.md).
 
 ## Distro compatibility
 

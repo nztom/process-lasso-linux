@@ -258,7 +258,8 @@ class NicePriorityDialog(QDialog):
 
         info = QLabel(
             "Nice priority: lower = higher priority.\n"
-            "Negative values require root (will fail silently if not root)."
+            "Raising priority may require the installed root helper; failed "
+            "changes are reported."
         )
         info.setWordWrap(True)
         layout.addWidget(info)

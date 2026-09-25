@@ -113,7 +113,7 @@ def set_process_affinity_set(pid: int, cpus: set[int]) -> bool:
 
 
 def set_affinity(pid: int, cpulist: str) -> bool:
-    """Parse and apply CPU affinity to a process and all of its threads."""
+    """Parse, apply, and verify one exact mask on all live process threads."""
     try:
         cpuset = cpulist_to_set(cpulist)
     except ValueError as exc:
