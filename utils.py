@@ -63,20 +63,53 @@ def get_thread_affinity_set(tid: int) -> set[int] | None:
 
 
 def set_process_affinity_set(pid: int, cpus: set[int]) -> bool:
-    """Apply one exact online mask to every currently visible process thread."""
+    """Apply and verify one exact online mask on every live process thread.
+
+    A second bounded pass catches threads created during the first pass.  TIDs
+    that disappear while the operation is in flight are not treated as live
+    failures, but every thread still present must read back the requested mask.
+    """
     cpuset = _online_affinity(cpus)
     if not cpuset:
         log.debug("set_process_affinity_set: no requested CPUs are currently online")
         return False
 
-    tids = get_process_tids(pid)
-    succeeded = sum(_set_thread_affinity_set(tid, cpuset) for tid in tids)
-    if succeeded:
-        log.debug(
-            "affinity pid=%d cpulist=%s: applied to %d/%d threads",
-            pid, _cpuset_to_cpulist(cpuset), succeeded, len(tids),
+    pending = set(get_process_tids(pid))
+    if not pending:
+        return False
+
+    successful_writes = 0
+    vanished: set[int] = set()
+    for _attempt in range(2):
+        for tid in sorted(pending):
+            if _set_thread_affinity_set(tid, cpuset):
+                successful_writes += 1
+
+        observed = set(get_process_tids(pid))
+        mismatched = {
+            tid for tid in observed
+            if get_thread_affinity_set(tid) != cpuset
+        }
+        live_after_reads = set(get_process_tids(pid))
+        vanished.update(pending - live_after_reads)
+        # Discard read failures for threads that vanished, and schedule threads
+        # created during verification for the next bounded pass.
+        pending = (
+            (mismatched & live_after_reads)
+            | (live_after_reads - observed)
         )
-    return bool(succeeded)
+        if live_after_reads and not pending:
+            log.debug(
+                "affinity pid=%d cpulist=%s: verified; writes=%d vanished=%d",
+                pid, _cpuset_to_cpulist(cpuset), successful_writes, len(vanished),
+            )
+            return True
+
+    log.warning(
+        "affinity pid=%d cpulist=%s: %d live thread(s) failed verification",
+        pid, _cpuset_to_cpulist(cpuset), len(pending),
+    )
+    return False
 
 
 def set_affinity(pid: int, cpulist: str) -> bool:

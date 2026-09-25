@@ -258,7 +258,7 @@ class ProcessTableTests(unittest.TestCase):
             5, table, "game.exe", initial_mode="absolute", initial_offset=0,
         )
         set_nice.assert_called_once_with(42, -3)
-        self.assertEqual(list(changed[0]), [42])
+        self.assertEqual(list(changed[0]), [42, "nice"])
         self.assertEqual(
             messages,
             ["Set nice offset=-8 (target=-3) on game.exe(42)"],

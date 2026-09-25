@@ -230,6 +230,44 @@ class MonitorSamplingTests(unittest.TestCase):
 
         set_affinity.assert_called_once_with(201, "0-3")
 
+    @mock.patch("monitor.utils.set_affinity", return_value=True)
+    @mock.patch("monitor.utils.get_thread_affinity_set", return_value={0, 1, 2, 3})
+    @mock.patch("monitor.utils.get_process_tids", return_value=[200])
+    def test_nice_only_policy_does_not_block_default_affinity(
+        self, _get_tids, _get_affinity, set_affinity
+    ):
+        engine = RuleEngine()
+        engine.add_rule(Rule(
+            pattern="worker", match_type="exact", nice=5,
+        ))
+        monitor = MonitorThread(
+            engine,
+            ProBalance({}),
+            {"cpu": {"default_affinity": "0-3"}},
+        )
+
+        with mock.patch.object(engine, "apply_to_process") as apply_policy:
+            monitor._apply_new_pid({"pid": 200, "name": "worker"})
+
+        apply_policy.assert_called_once_with(200, "worker")
+        set_affinity.assert_called_once_with(200, "0-3")
+
+    def test_manual_priority_override_keeps_affinity_policy_active(self):
+        engine = RuleEngine()
+        affinity_rule = Rule(
+            pattern="worker", match_type="exact", affinity="0-3",
+        )
+        engine.add_rule(affinity_rule)
+        monitor = MonitorThread(engine, ProBalance({}), {})
+
+        # A successful Current Priority edit must not suppress the independent
+        # Always affinity policy.
+        monitor.set_manual_policy_override(200, "nice")
+
+        self.assertNotIn(
+            (affinity_rule.rule_id, 200), engine._suppressed_rule_pids
+        )
+
     @mock.patch("monitor.utils.get_process_tids")
     def test_processes_without_rules_or_default_skip_thread_scan(self, get_tids):
         monitor = MonitorThread(RuleEngine(), ProBalance({}), {})

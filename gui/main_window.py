@@ -318,9 +318,9 @@ class MainWindow(QMainWindow):
         if index < 0 and selected:
             self._proc_table.set_user_filter("")
 
-    @pyqtSlot(int)
-    def _on_policy_value_manual_change(self, pid: int):
-        self._monitor.set_manual_policy_override(pid)
+    @pyqtSlot(int, str)
+    def _on_policy_value_manual_change(self, pid: int, policy: str):
+        self._monitor.set_manual_policy_override(pid, policy)
 
     @pyqtSlot(dict)
     def _on_pb_settings_changed(self, pb_cfg: dict):

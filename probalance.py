@@ -208,11 +208,11 @@ class ProBalance:
                                 f"[ProBalance] RESTORE {name}({pid}) "
                                 f"cpu={cpu:.1f}% nice {current_nice}→{orig}"
                             )
-                        state.state = "NORMAL"
-                        state.consecutive_high = 0.0
-                        state.consecutive_low = 0.0
-                        state.original_nice = orig
-                        state.throttle_nice = None
+                            state.state = "NORMAL"
+                            state.consecutive_high = 0.0
+                            state.consecutive_low = 0.0
+                            state.original_nice = orig
+                            state.throttle_nice = None
                 else:
                     state.consecutive_low = 0.0
 

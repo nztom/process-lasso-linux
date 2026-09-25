@@ -181,6 +181,39 @@ class ProBalanceTests(unittest.TestCase):
 
         self.assertEqual(probalance.get_throttled_pids(), set())
 
+    @mock.patch("probalance.utils.set_nice", side_effect=[True, False, True])
+    def test_cooldown_retries_failed_restore(self, set_nice):
+        config = {
+            "enabled": True,
+            "cpu_threshold_percent": 80.0,
+            "consecutive_seconds": 0,
+            "nice_adjustment": 10,
+            "nice_floor": 15,
+            "restore_threshold_percent": 40.0,
+            "restore_hysteresis_seconds": 0,
+            "exempt_patterns": [],
+        }
+        probalance = ProBalance(config)
+        hot = [{
+            "pid": 101, "name": "worker", "cpu_percent": 100.0, "nice": 0,
+        }]
+        cool = [{
+            "pid": 101, "name": "worker", "cpu_percent": 0.0, "nice": 10,
+        }]
+        probalance.tick(hot, 1.0)
+
+        probalance.tick(cool, 1.0)
+
+        self.assertEqual(probalance.get_throttled_pids(), {101})
+
+        probalance.tick(cool, 1.0)
+
+        self.assertEqual(probalance.get_throttled_pids(), set())
+        self.assertEqual(
+            set_nice.call_args_list,
+            [mock.call(101, 10), mock.call(101, 0), mock.call(101, 0)],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

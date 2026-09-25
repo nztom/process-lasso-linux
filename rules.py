@@ -175,6 +175,7 @@ class RuleEngine:
         self._rules: list[Rule] = []
         self._attempts_by_rule: dict[str, dict[int, int]] = {}
         self._suppressed_rule_pids: set[tuple[str, int]] = set()
+        self._suppressed_rule_fields: set[tuple[str, int, str]] = set()
         self._affinity_seen: set[str] = set()
         self._affinity_drift_attempts: dict[str, int] = {}
         self._affinity_released: set[str] = set()
@@ -202,6 +203,7 @@ class RuleEngine:
         self._rules = loaded
         self._attempts_by_rule.clear()
         self._suppressed_rule_pids.clear()
+        self._suppressed_rule_fields.clear()
         self._affinity_seen.clear()
         self._affinity_drift_attempts.clear()
         self._affinity_released.clear()
@@ -217,6 +219,7 @@ class RuleEngine:
         self._rules = loaded
         self._attempts_by_rule.clear()
         self._suppressed_rule_pids.clear()
+        self._suppressed_rule_fields.clear()
         self._affinity_seen.clear()
         self._affinity_drift_attempts.clear()
         self._affinity_released.clear()
@@ -297,12 +300,19 @@ class RuleEngine:
         self._suppressed_rule_pids = {
             key for key in self._suppressed_rule_pids if key[0] != rule_id
         }
+        self._suppressed_rule_fields = {
+            key for key in self._suppressed_rule_fields if key[0] != rule_id
+        }
         self._clear_affinity_runtime(rule_id)
 
     def update_rule(self, rule: Rule):
         self._attempts_by_rule.pop(rule.rule_id, None)
         self._suppressed_rule_pids = {
             key for key in self._suppressed_rule_pids if key[0] != rule.rule_id
+        }
+        self._suppressed_rule_fields = {
+            key for key in self._suppressed_rule_fields
+            if key[0] != rule.rule_id
         }
         self._clear_affinity_runtime(rule.rule_id)
         for i, r in enumerate(self._rules):
@@ -358,6 +368,9 @@ class RuleEngine:
         self._suppressed_rule_pids = {
             key for key in self._suppressed_rule_pids if key[1] != pid
         }
+        self._suppressed_rule_fields = {
+            key for key in self._suppressed_rule_fields if key[1] != pid
+        }
         pid_marker = f":{pid}:"
         self._affinity_seen = {
             key for key in self._affinity_seen if pid_marker not in key
@@ -372,11 +385,24 @@ class RuleEngine:
         self._priority_state.prune()
         self._priority_state.flush_if_due()
 
-    def suppress_pid(self, pid: int):
-        """Stop all current rules from overriding a manual process change."""
+    def suppress_pid(self, pid: int, policy: str | None = None):
+        """Stop rules from overriding a manual process-policy change."""
+        if policy not in {None, "affinity", "nice", "ionice_class"}:
+            raise ValueError(f"unsupported suppressed policy: {policy}")
         for rule in self._rules:
-            self._suppressed_rule_pids.add((rule.rule_id, pid))
-            self._attempts_by_rule.setdefault(rule.rule_id, {})[pid] = RULE_APPLY_ATTEMPTS
+            if policy is None:
+                self._suppressed_rule_pids.add((rule.rule_id, pid))
+                self._attempts_by_rule.setdefault(rule.rule_id, {})[pid] = (
+                    RULE_APPLY_ATTEMPTS
+                )
+            elif getattr(rule, policy) is not None:
+                self._suppressed_rule_fields.add((rule.rule_id, pid, policy))
+
+    def _is_suppressed(self, rule: Rule, pid: int, policy: str) -> bool:
+        return (
+            (rule.rule_id, pid) in self._suppressed_rule_pids
+            or (rule.rule_id, pid, policy) in self._suppressed_rule_fields
+        )
 
     def _can_apply(self, rule: Rule, pid: int) -> bool:
         attempts = self._attempts_by_rule.get(rule.rule_id, {})
@@ -416,7 +442,7 @@ class RuleEngine:
         rule = self._effective_affinity_rule(proc_name)
         if rule is None or (
             not rule.force_apply
-            and (rule.rule_id, pid) in self._suppressed_rule_pids
+            and self._is_suppressed(rule, pid, "affinity")
         ):
             return []
         desired = utils.cpulist_to_online_set(rule.affinity)
@@ -659,7 +685,14 @@ class RuleEngine:
                 continue
             if not rule.force_apply:
                 self._record_attempt(rule, pid)
-            if rule is nice_rule and rule.nice is not None and rule.nice_mode == "absolute":
+            if (
+                rule is nice_rule
+                and rule.nice is not None
+                and rule.nice_mode == "absolute"
+                and (rule.force_apply or not self._is_suppressed(
+                    rule, pid, "nice"
+                ))
+            ):
                 keyed = self._prepare_absolute_threads(
                     rule, pid, utils.get_process_tids(pid), original_nice_hint
                 )
@@ -673,7 +706,12 @@ class RuleEngine:
                     msg = f"[Rule:{rule.name}] nice={rule.nice} failed (root needed?) for {proc_name}({pid})"
                     self._log(msg)
                     actions.append(msg)
-            if rule.ionice_class is not None:
+            if (
+                rule.ionice_class is not None
+                and (rule.force_apply or not self._is_suppressed(
+                    rule, pid, "ionice_class"
+                ))
+            ):
                 if utils.set_ionice(pid, rule.ionice_class, rule.ionice_level):
                     msg = f"[Rule:{rule.name}] Set ionice class={rule.ionice_class} level={rule.ionice_level} on {proc_name}({pid})"
                     self._log(msg)
@@ -683,7 +721,7 @@ class RuleEngine:
             and nice_rule.nice_mode == "offset"
             and (
                 nice_rule.force_apply
-                or (nice_rule.rule_id, pid) not in self._suppressed_rule_pids
+                or not self._is_suppressed(nice_rule, pid, "nice")
             )
         ):
             actions.extend(self._apply_offset_threads(
@@ -706,7 +744,12 @@ class RuleEngine:
                 or not rule.matches(proc_name)
             ):
                 continue
-            if rule is nice_rule and rule.nice is not None and rule.nice_mode == "absolute":
+            if (
+                rule is nice_rule
+                and rule.nice is not None
+                and rule.nice_mode == "absolute"
+                and not self._is_suppressed(rule, pid, "nice")
+            ):
                 keyed = self._prepare_absolute_threads(rule, pid, [tid])
                 applied = utils.set_thread_nice(tid, rule.nice)
                 self._finish_absolute_threads(keyed, rule.nice, applied)
@@ -717,7 +760,12 @@ class RuleEngine:
                     )
                     self._log(msg)
                     actions.append(msg)
-            if rule.ionice_class is not None:
+            if (
+                rule.ionice_class is not None
+                and (rule.force_apply or not self._is_suppressed(
+                    rule, pid, "ionice_class"
+                ))
+            ):
                 if utils.set_ionice(tid, rule.ionice_class, rule.ionice_level):
                     msg = (
                         f"[Rule:{rule.name}] Set ionice class="
@@ -731,7 +779,7 @@ class RuleEngine:
             and nice_rule.nice_mode == "offset"
             and (
                 nice_rule.force_apply
-                or (nice_rule.rule_id, pid) not in self._suppressed_rule_pids
+                or not self._is_suppressed(nice_rule, pid, "nice")
             )
         ):
             actions.extend(self._apply_offset_threads(nice_rule, pid, [tid], proc_name))

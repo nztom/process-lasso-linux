@@ -99,9 +99,10 @@ class SetNiceTests(unittest.TestCase):
 
     @mock.patch("utils.get_process_tids", return_value=[1234, 1235])
     @mock.patch("utils.get_online_cpus", return_value={0, 1, 2, 3})
+    @mock.patch("utils.get_thread_affinity_set", return_value={0, 1, 2, 3})
     @mock.patch("utils._set_thread_affinity_set", return_value=True)
     def test_process_affinity_uses_shared_thread_setter(
-        self, set_thread, _online, _tids
+        self, set_thread, _get_affinity, _online, _tids
     ):
         self.assertTrue(utils.set_affinity(1234, "0-3"))
 
@@ -109,6 +110,91 @@ class SetNiceTests(unittest.TestCase):
             mock.call(1234, {0, 1, 2, 3}),
             mock.call(1235, {0, 1, 2, 3}),
         ])
+
+    @mock.patch(
+        "utils.get_thread_affinity_set",
+        side_effect=lambda tid: {0, 1, 2, 3} if tid == 1234 else {0},
+    )
+    @mock.patch("utils.get_process_tids", return_value=[1234, 1235])
+    @mock.patch("utils.get_online_cpus", return_value={0, 1, 2, 3})
+    @mock.patch(
+        "utils._set_thread_affinity_set",
+        side_effect=lambda tid, _cpus: tid == 1234,
+    )
+    def test_process_affinity_fails_when_any_live_thread_cannot_be_updated(
+        self, set_thread, _online, _tids, _get_affinity
+    ):
+        self.assertFalse(utils.set_affinity(1234, "0-3"))
+
+        self.assertEqual(set_thread.call_args_list, [
+            mock.call(1234, {0, 1, 2, 3}),
+            mock.call(1235, {0, 1, 2, 3}),
+            mock.call(1235, {0, 1, 2, 3}),
+        ])
+
+    @mock.patch(
+        "utils.get_thread_affinity_set", return_value={0, 1, 2, 3}
+    )
+    @mock.patch(
+        "utils.get_process_tids", side_effect=[[1234, 1235], [1234], [1234]]
+    )
+    @mock.patch("utils.get_online_cpus", return_value={0, 1, 2, 3})
+    @mock.patch(
+        "utils._set_thread_affinity_set",
+        side_effect=lambda tid, _cpus: tid == 1234,
+    )
+    def test_process_affinity_ignores_failed_thread_that_vanished(
+        self, set_thread, _online, _get_tids, _get_affinity
+    ):
+        self.assertTrue(utils.set_affinity(1234, "0-3"))
+
+        self.assertEqual(set_thread.call_args_list, [
+            mock.call(1234, {0, 1, 2, 3}),
+            mock.call(1235, {0, 1, 2, 3}),
+        ])
+
+    @mock.patch("utils.get_online_cpus", return_value={0, 1, 2, 3})
+    def test_process_affinity_catches_thread_created_during_first_pass(
+        self, _online
+    ):
+        applied = set()
+        tids = mock.Mock(side_effect=[
+            [1234],
+            [1234, 1235], [1234, 1235],
+            [1234, 1235], [1234, 1235],
+        ])
+
+        def set_thread(tid, _cpus):
+            applied.add(tid)
+            return True
+
+        def get_affinity(tid):
+            return {0, 1, 2, 3} if tid in applied else {0}
+
+        with mock.patch("utils.get_process_tids", tids), \
+             mock.patch(
+                 "utils._set_thread_affinity_set", side_effect=set_thread
+             ) as setter, \
+             mock.patch(
+                 "utils.get_thread_affinity_set", side_effect=get_affinity
+             ):
+            self.assertTrue(utils.set_affinity(1234, "0-3"))
+
+        self.assertEqual(setter.call_args_list, [
+            mock.call(1234, {0, 1, 2, 3}),
+            mock.call(1235, {0, 1, 2, 3}),
+        ])
+
+    @mock.patch("utils.get_thread_affinity_set", return_value={0})
+    @mock.patch("utils.get_process_tids", return_value=[1234])
+    @mock.patch("utils.get_online_cpus", return_value={0, 1, 2, 3})
+    @mock.patch("utils._set_thread_affinity_set", return_value=True)
+    def test_process_affinity_fails_when_kernel_readback_never_matches(
+        self, set_thread, _online, _get_tids, _get_affinity
+    ):
+        self.assertFalse(utils.set_affinity(1234, "0-3"))
+
+        self.assertEqual(set_thread.call_count, 2)
 
     @mock.patch("nice_helper.set_negative_nice_threads", return_value={1235})
     def test_negative_thread_nice_uses_shared_batch_helper(self, helper):

@@ -213,6 +213,7 @@ class MonitorThread(QThread):
         self._known_pids: set[int] = set()
         self._known_tids_by_pid: dict[int, set[int]] = {}
         self._manually_overridden_pids: set[int] = set()
+        self._manual_overrides_by_pid: dict[int, set[str]] = {}
         self._process_cache: dict[int, ProcessInfo] = {}
         self._gpu_memory = NvidiaGpuMemorySampler()
 
@@ -254,9 +255,11 @@ class MonitorThread(QThread):
                 except OSError:
                     cmdline_raw = []
                 name = _resolve_name(comm, cmdline_raw)
-                if self._rule_engine.matches_process(name):
+                matched = self._rule_engine.matches_process(name)
+                policy = self._rule_engine.effective_policy(name)
+                if matched:
                     self._rule_engine.apply_to_process(pid, name)
-                elif default:
+                if default and policy.affinity is None:
                     if (self._game_sessions and self._game_sessions.session_for_pid(pid)):
                         continue
                     if utils.set_affinity(pid, default):
@@ -264,10 +267,18 @@ class MonitorThread(QThread):
             except OSError:
                 pass
 
-    def set_manual_policy_override(self, pid: int):
-        """Stop the startup burst after a manual affinity or nice change."""
+    def set_manual_policy_override(self, pid: int, policy: str | None = None):
+        """Preserve a manual change without disabling unrelated policies."""
         self._manually_overridden_pids.add(pid)
-        self._rule_engine.suppress_pid(pid)
+        marker = "*" if policy is None else policy
+        self._manual_overrides_by_pid.setdefault(pid, set()).add(marker)
+        self._rule_engine.suppress_pid(pid, policy)
+
+    def _affinity_manually_overridden(self, pid: int) -> bool:
+        fields = self._manual_overrides_by_pid.get(pid)
+        if fields is None:
+            return pid in self._manually_overridden_pids
+        return bool({"*", "affinity"} & fields)
 
     def stop(self):
         self._rule_engine.flush_priority_state()
@@ -314,6 +325,7 @@ class MonitorThread(QThread):
         self._original_affinities.pop(pid, None)
         self._known_tids_by_pid.pop(pid, None)
         self._manually_overridden_pids.discard(pid)
+        self._manual_overrides_by_pid.pop(pid, None)
 
     def _forget_process(self, pid: int):
         """Coordinate cleanup after process exit or detected PID reuse."""
@@ -352,9 +364,10 @@ class MonitorThread(QThread):
         if game_session and not self._game_sessions.launch_has_started(game_session, pid, name):
             return
         matched = self._rule_engine.matches_process(name)
+        policy = self._rule_engine.effective_policy(name)
         if matched:
             self._rule_engine.apply_to_process(pid, name)
-        elif not game_session:
+        if policy.affinity is None and not game_session:
             default = self._default_affinity()
             if default:
                 if utils.set_affinity(pid, default):
@@ -373,6 +386,7 @@ class MonitorThread(QThread):
         default = self._default_affinity()
         for pid, info in list(self._process_cache.items()):
             matched = self._rule_engine.matches_process(info["name"])
+            policy = self._rule_engine.effective_policy(info["name"])
             if not matched and not default:
                 continue
             current_tids = set(utils.get_process_tids(pid))
@@ -385,9 +399,10 @@ class MonitorThread(QThread):
                     continue
                 if matched:
                     self._rule_engine.apply_to_thread(pid, tid, info["name"])
-                elif (
+                if (
                     default
-                    and pid not in self._manually_overridden_pids
+                    and policy.affinity is None
+                    and not self._affinity_manually_overridden(pid)
                     and not (self._game_sessions and self._game_sessions.session_for_pid(pid))
                     and utils.set_thread_affinity(tid, default)
                 ):

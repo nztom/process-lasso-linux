@@ -108,7 +108,7 @@ class ProcessTable(QTableWidget):
     """Sortable process table with right-click context menu."""
 
     persistent_policy_changed = pyqtSignal()
-    policy_value_manually_changed = pyqtSignal(int)  # pid — preserve manual change
+    policy_value_manually_changed = pyqtSignal(int, str)
     probalance_exclude_requested = pyqtSignal(str)  # process name pattern
     probalance_include_requested = pyqtSignal(str)  # process name to un-exempt
     available_users_changed = pyqtSignal(list)
@@ -696,7 +696,7 @@ class ProcessTable(QTableWidget):
             cpulist = dlg.get_cpulist()
             if utils.set_affinity(observed.pid, cpulist):
                 msg = f"Set affinity={cpulist} on {observed.name}({observed.pid})"
-                self.policy_value_manually_changed.emit(observed.pid)
+                self.policy_value_manually_changed.emit(observed.pid, "affinity")
             else:
                 msg = f"Failed to set affinity on {observed.name}({observed.pid})"
             if self._log_callback:
@@ -719,7 +719,7 @@ class ProcessTable(QTableWidget):
             )
             if utils.set_nice(observed.pid, nice):
                 msg = f"Set {change} on {observed.name}({observed.pid})"
-                self.policy_value_manually_changed.emit(observed.pid)
+                self.policy_value_manually_changed.emit(observed.pid, "nice")
             else:
                 msg = f"Failed to set {change} on {observed.name}({observed.pid}) (root needed?)"
             if self._log_callback:
@@ -734,7 +734,7 @@ class ProcessTable(QTableWidget):
             lvl = dlg.get_ionice_level()
             if utils.set_ionice(observed.pid, cls, lvl):
                 msg = f"Set ionice class={cls} level={lvl} on {observed.name}({observed.pid})"
-                self.policy_value_manually_changed.emit(observed.pid)
+                self.policy_value_manually_changed.emit(observed.pid, "ionice_class")
             else:
                 msg = f"Failed to set ionice on {observed.name}({observed.pid})"
             if self._log_callback:
