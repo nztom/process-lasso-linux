@@ -95,6 +95,19 @@ class SetNiceTests(unittest.TestCase):
 
         set_affinity.assert_not_called()
 
+    @mock.patch("utils.get_process_tids", return_value=[1234, 1235])
+    @mock.patch("utils.get_online_cpus", return_value={0, 1, 2, 3})
+    @mock.patch("utils._set_thread_affinity_set", return_value=True)
+    def test_process_affinity_uses_shared_thread_setter(
+        self, set_thread, _online, _tids
+    ):
+        self.assertTrue(utils.set_affinity(1234, "0-3"))
+
+        self.assertEqual(set_thread.call_args_list, [
+            mock.call(1234, {0, 1, 2, 3}),
+            mock.call(1235, {0, 1, 2, 3}),
+        ])
+
     @mock.patch("nice_helper.set_negative_nice_thread", return_value=True)
     def test_negative_thread_nice_uses_single_thread_helper(self, helper):
         self.assertTrue(utils.set_thread_nice(1235, -8))

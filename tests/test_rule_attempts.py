@@ -30,7 +30,7 @@ class RuleAttemptTests(unittest.TestCase):
             side_effect=lambda pid, tid, rule_id, boot: f"{boot}:{pid}:1:{tid}:2:{rule_id}",
         )
         self.current_affinity = mock.patch(
-            "rules.os.sched_getaffinity", return_value={8}
+            "rules.utils.get_thread_affinity_set", return_value={8}
         )
         self.tids.start()
         self.identity.start()
@@ -201,7 +201,7 @@ class RuleAttemptTests(unittest.TestCase):
 
     @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_matching_affinity_is_never_rewritten(self, set_affinity):
-        with mock.patch("rules.os.sched_getaffinity", return_value={0, 1, 2, 3}):
+        with mock.patch("rules.utils.get_thread_affinity_set", return_value={0, 1, 2, 3}):
             for _ in range(20):
                 self.engine.apply_to_process(100, "game.exe")
 
@@ -209,7 +209,7 @@ class RuleAttemptTests(unittest.TestCase):
 
     @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_narrower_application_affinity_inside_rule_is_preserved(self, set_affinity):
-        with mock.patch("rules.os.sched_getaffinity", return_value={0}):
+        with mock.patch("rules.utils.get_thread_affinity_set", return_value={0}):
             for _ in range(20):
                 self.engine.apply_to_process(100, "game.exe")
 
@@ -217,15 +217,34 @@ class RuleAttemptTests(unittest.TestCase):
         self.assertEqual(self.engine._affinity_drift_attempts, {})
 
     @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_concurrent_in_bounds_pin_is_not_widened(self, set_affinity):
+        with mock.patch(
+            "rules.utils.get_thread_affinity_set", side_effect=[{8}, {0}]
+        ):
+            self.engine.apply_to_process(100, "game.exe")
+
+        set_affinity.assert_not_called()
+        self.assertEqual(self.engine._affinity_drift_attempts, {})
+
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
+    def test_correction_uses_latest_narrower_drift_mask(self, set_affinity):
+        with mock.patch(
+            "rules.utils.get_thread_affinity_set", side_effect=[{8}, {2, 8}]
+        ):
+            self.engine.apply_to_process(100, "game.exe")
+
+        set_affinity.assert_called_once_with(100, "2")
+
+    @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_partly_outside_affinity_is_intersected_with_rule(self, set_affinity):
-        with mock.patch("rules.os.sched_getaffinity", return_value={2, 8}):
+        with mock.patch("rules.utils.get_thread_affinity_set", return_value={2, 8}):
             self.engine.apply_to_process(100, "game.exe")
 
         set_affinity.assert_called_once_with(100, "2")
 
     @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_disjoint_affinity_falls_back_to_complete_rule_mask(self, set_affinity):
-        with mock.patch("rules.os.sched_getaffinity", return_value={8}):
+        with mock.patch("rules.utils.get_thread_affinity_set", return_value={8}):
             self.engine.apply_to_process(100, "game.exe")
 
         set_affinity.assert_called_once_with(100, "0-3")
@@ -233,7 +252,7 @@ class RuleAttemptTests(unittest.TestCase):
     @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_forced_rule_preserves_narrower_compliant_affinity(self, set_affinity):
         self.rule.force_apply = True
-        with mock.patch("rules.os.sched_getaffinity", return_value={1}):
+        with mock.patch("rules.utils.get_thread_affinity_set", return_value={1}):
             for _ in range(20):
                 self.engine.apply_to_process(100, "game.exe")
 
@@ -242,7 +261,7 @@ class RuleAttemptTests(unittest.TestCase):
     @mock.patch("rules.utils.set_thread_affinity", return_value=True)
     def test_forced_rule_intersects_partly_outside_affinity(self, set_affinity):
         self.rule.force_apply = True
-        with mock.patch("rules.os.sched_getaffinity", return_value={2, 8}):
+        with mock.patch("rules.utils.get_thread_affinity_set", return_value={2, 8}):
             self.engine.apply_to_process(100, "game.exe")
 
         set_affinity.assert_called_once_with(100, "2")
@@ -253,7 +272,7 @@ class RuleAttemptTests(unittest.TestCase):
         self, set_affinity, _online
     ):
         self.rule.affinity = "0-3"
-        with mock.patch("rules.os.sched_getaffinity", return_value={0, 1}):
+        with mock.patch("rules.utils.get_thread_affinity_set", return_value={0, 1}):
             for _ in range(RULE_APPLY_ATTEMPTS + 5):
                 self.engine.apply_to_process(100, "game.exe")
 

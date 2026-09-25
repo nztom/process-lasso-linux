@@ -106,7 +106,7 @@ class RuleSuppressionTests(unittest.TestCase):
         set_nice_threads.assert_not_called()
 
     @mock.patch("rules.thread_identity", return_value="boot:100:1:100:2:policy")
-    @mock.patch("rules.os.sched_getaffinity", return_value={8})
+    @mock.patch("rules.utils.get_thread_affinity_set", return_value={8})
     @mock.patch("rules.utils.set_ionice", return_value=True)
     @mock.patch("rules.utils.set_nice", return_value=True)
     @mock.patch("rules.utils.set_thread_affinity", return_value=True)

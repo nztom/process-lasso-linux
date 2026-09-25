@@ -39,68 +39,90 @@ def cpulist_to_online_set(cpulist: str) -> set[int]:
     return cpulist_to_set(cpulist) & get_online_cpus()
 
 
-def set_affinity(pid: int, cpulist: str) -> bool:
-    """Apply CPU affinity to a process AND all its threads via sched_setaffinity(2).
+def _online_affinity(cpus: set[int]) -> set[int]:
+    """Restrict an affinity target to CPUs that can currently accept work."""
+    return set(cpus) & get_online_cpus()
 
-    Uses os.sched_setaffinity directly (no subprocess) so it's fast enough to
-    apply to hundreds of processes for the default-affinity feature.
 
-    Returns True if at least one thread was set successfully."""
+def _set_thread_affinity_set(tid: int, cpus: set[int]) -> bool:
+    """Single low-level process/thread affinity write boundary."""
     try:
-        cpuset = cpulist_to_online_set(cpulist)
-    except ValueError as e:
-        log.warning("set_affinity: bad cpulist %r: %s", cpulist, e)
-        return False
-
-    if not cpuset:
-        log.debug("set_affinity: no requested CPUs are currently online")
-        return False
-
-    tids = get_process_tids(pid)
-    any_ok = False
-    for tid in tids:
-        try:
-            os.sched_setaffinity(tid, cpuset)
-            any_ok = True
-        except (PermissionError, ProcessLookupError, OSError) as e:
-            log.debug("sched_setaffinity tid=%d: %s", tid, e)
-
-    if any_ok:
-        log.debug("affinity pid=%d cpulist=%s: applied to %d threads", pid, cpulist, len(tids))
-    return any_ok
-
-
-def set_thread_affinity(tid: int, cpulist: str) -> bool:
-    """Apply CPU affinity to one newly observed thread."""
-    try:
-        cpuset = cpulist_to_online_set(cpulist)
-        if not cpuset:
-            return False
-        os.sched_setaffinity(tid, cpuset)
+        os.sched_setaffinity(tid, cpus)
         return True
-    except (ValueError, PermissionError, ProcessLookupError, OSError) as exc:
+    except (PermissionError, ProcessLookupError, OSError) as exc:
         log.debug("sched_setaffinity tid=%d: %s", tid, exc)
         return False
 
 
+def get_thread_affinity_set(tid: int) -> set[int] | None:
+    """Read one live thread mask, returning None when the thread is unavailable."""
+    try:
+        return set(os.sched_getaffinity(tid))
+    except (PermissionError, ProcessLookupError, OSError):
+        return None
+
+
+def set_process_affinity_set(pid: int, cpus: set[int]) -> bool:
+    """Apply one exact online mask to every currently visible process thread."""
+    cpuset = _online_affinity(cpus)
+    if not cpuset:
+        log.debug("set_process_affinity_set: no requested CPUs are currently online")
+        return False
+
+    tids = get_process_tids(pid)
+    succeeded = sum(_set_thread_affinity_set(tid, cpuset) for tid in tids)
+    if succeeded:
+        log.debug(
+            "affinity pid=%d cpulist=%s: applied to %d/%d threads",
+            pid, _cpuset_to_cpulist(cpuset), succeeded, len(tids),
+        )
+    return bool(succeeded)
+
+
+def set_affinity(pid: int, cpulist: str) -> bool:
+    """Parse and apply CPU affinity to a process and all of its threads."""
+    try:
+        cpuset = cpulist_to_set(cpulist)
+    except ValueError as exc:
+        log.warning("set_affinity: bad cpulist %r: %s", cpulist, exc)
+        return False
+    return set_process_affinity_set(pid, cpuset)
+
+
+def set_thread_affinity_set(tid: int, cpus: set[int]) -> bool:
+    """Apply one exact online mask to a single thread."""
+    cpuset = _online_affinity(cpus)
+    if not cpuset:
+        log.debug("set_thread_affinity_set: no requested CPUs are currently online")
+        return False
+    return _set_thread_affinity_set(tid, cpuset)
+
+
+def set_thread_affinity(tid: int, cpulist: str) -> bool:
+    """Parse and apply CPU affinity to one thread."""
+    try:
+        cpuset = cpulist_to_set(cpulist)
+    except ValueError as exc:
+        log.warning("set_thread_affinity: bad cpulist %r: %s", cpulist, exc)
+        return False
+    return set_thread_affinity_set(tid, cpuset)
+
+
 def get_affinity_str(pid: int) -> str:
     """Read current affinity of main thread, return as cpulist string."""
-    try:
-        cpuset = os.sched_getaffinity(pid)
-        return _cpuset_to_cpulist(cpuset)
-    except (PermissionError, ProcessLookupError, OSError):
-        return ""
+    cpuset = get_thread_affinity_set(pid)
+    return _cpuset_to_cpulist(cpuset) if cpuset else ""
 
 
 def get_aggregate_affinity_str(pid: int, fallback: str = "") -> str:
     """Return the union of the live affinity masks for every process thread."""
     aggregate: set[int] = set()
     for tid in get_process_tids(pid):
-        try:
-            aggregate.update(os.sched_getaffinity(tid))
-        except (PermissionError, ProcessLookupError, OSError):
+        affinity = get_thread_affinity_set(tid)
+        if affinity is None:
             # A thread may exit between listing /proc/<pid>/task and this read.
             continue
+        aggregate.update(affinity)
     return _cpuset_to_cpulist(aggregate) if aggregate else fallback
 
 

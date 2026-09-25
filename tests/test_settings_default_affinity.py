@@ -21,7 +21,7 @@ class DefaultAffinitySettingsTests(unittest.TestCase):
     @mock.patch("gui.settings_tab.QMessageBox.information")
     @mock.patch("gui.settings_tab.subprocess.run")
     @mock.patch("gui.settings_tab.cpu_tools.get_cpu_info")
-    def test_all_monitor_intervals_are_loaded_and_saved(
+    def test_legacy_monitor_intervals_migrate_to_one_global_interval(
         self, cpu_info, _run, _message
     ):
         cpu_info.return_value = cpu_tools.CPUInfo(
@@ -37,22 +37,14 @@ class DefaultAffinitySettingsTests(unittest.TestCase):
             "display_refresh_interval_ms": 1700,
         }}
         tab = SettingsTab(config)
-        self.assertEqual(tab._rule_interval.value(), 300)
-        self.assertEqual(tab._process_scan_interval.value(), 800)
-        self.assertEqual(tab._display_interval.value(), 1700)
+        self.assertEqual(tab._monitor_interval.value(), 800)
         emissions = []
         tab.settings_changed.connect(emissions.append)
 
-        tab._rule_interval.setValue(400)
-        tab._process_scan_interval.setValue(900)
-        tab._display_interval.setValue(1800)
+        tab._monitor_interval.setValue(900)
         tab._apply_monitor()
 
-        self.assertEqual(config["monitor"], {
-            "rule_enforce_interval_ms": 400,
-            "process_scan_interval_ms": 900,
-            "display_refresh_interval_ms": 1800,
-        })
+        self.assertEqual(config["monitor"], {"interval_ms": 900})
         self.assertEqual(len(emissions), 1)
 
     @mock.patch("gui.settings_tab.QMessageBox.information")

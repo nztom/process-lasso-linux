@@ -8,6 +8,14 @@ from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".config" / "process-lasso"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+MONITOR_INTERVAL_DEFAULT_MS = 1000
+MONITOR_INTERVAL_MIN_MS = 500
+MONITOR_INTERVAL_MAX_MS = 10000
+LEGACY_MONITOR_INTERVAL_KEYS = (
+    "process_scan_interval_ms",
+    "display_refresh_interval_ms",
+    "rule_enforce_interval_ms",
+)
 
 DEFAULT_GAME_ENVIRONMENT = [
     "__NV_PRIME_RENDER_OFFLOAD=1",
@@ -36,9 +44,7 @@ DEFAULT_CONFIG = {
         "exempt_patterns": ["kwin", "plasmashell", "systemd", "kthreadd", "Xorg", "xwayland"],
     },
     "monitor": {
-        "display_refresh_interval_ms": 2000,
-        "process_scan_interval_ms": 1000,
-        "rule_enforce_interval_ms": 500,
+        "interval_ms": MONITOR_INTERVAL_DEFAULT_MS,
     },
     "ui": {
         "start_minimized": False,
@@ -102,6 +108,38 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def monitor_interval_ms(config: dict) -> int:
+    """Return the unified monitor cadence, accepting pre-migration configs."""
+    monitor = config.get("monitor", {})
+    if "interval_ms" in monitor:
+        value = monitor["interval_ms"]
+    else:
+        value = next(
+            (monitor[key] for key in LEGACY_MONITOR_INTERVAL_KEYS
+             if key in monitor),
+            MONITOR_INTERVAL_DEFAULT_MS,
+        )
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        value = MONITOR_INTERVAL_DEFAULT_MS
+    return max(MONITOR_INTERVAL_MIN_MS, min(MONITOR_INTERVAL_MAX_MS, value))
+
+
+def _migrate_monitor_config(config: dict, source: dict | None = None) -> bool:
+    """Replace legacy per-phase intervals with one global monitor interval."""
+    monitor = config.setdefault("monitor", {})
+    source = monitor if source is None else source
+    normalized = monitor_interval_ms({"monitor": source})
+    changed = (source.get("interval_ms") != normalized) or any(
+        key in monitor for key in LEGACY_MONITOR_INTERVAL_KEYS
+    )
+    monitor["interval_ms"] = normalized
+    for key in LEGACY_MONITOR_INTERVAL_KEYS:
+        monitor.pop(key, None)
+    return changed
+
+
 def load() -> dict:
     """Load config, filling missing keys with defaults."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -118,8 +156,12 @@ def load() -> dict:
             )
             needs_game_environment = "environment" not in data.get("game_mode", {})
             needs_game_wrappers = "wrappers" not in data.get("game_mode", {})
+            monitor_migrated = _migrate_monitor_config(
+                merged, data.get("monitor", {})
+            )
             merged = _initialize_game_mode_defaults(merged)
-            if needs_game_defaults or needs_game_environment or needs_game_wrappers:
+            if (needs_game_defaults or needs_game_environment
+                    or needs_game_wrappers or monitor_migrated):
                 save(merged)
             return merged
         except (json.JSONDecodeError, OSError):

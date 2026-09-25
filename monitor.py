@@ -15,6 +15,7 @@ from probalance import ProBalance
 from process_info import ProcessInfo, ProcessPolicyView, ProcessSnapshot
 from runtime_cleanup import ProcessRuntimeCleanup
 from gpu_memory import NvidiaGpuMemorySampler
+import config as config_module
 import utils
 
 log = logging.getLogger(__name__)
@@ -241,7 +242,7 @@ class MonitorThread(QThread):
     def update_config(self, config: dict):
         self._config = config
         self._probalance.update_config(config.get("probalance", {}))
-        # Interrupt the current wait so new monitor intervals take effect now.
+        # Interrupt the current wait so a new global interval takes effect now.
         self._wake_event.set()
 
     def reapply_all_defaults(self):
@@ -276,13 +277,11 @@ class MonitorThread(QThread):
         self._stop = True
         self._wake_event.set()
 
-    def _monitor_intervals(self) -> tuple[float, float, float]:
-        """Return current rule, process-scan, and display intervals in seconds."""
-        monitor = self._config.get("monitor", {})
-        return (
-            max(0.001, monitor.get("rule_enforce_interval_ms", 500) / 1000.0),
-            max(0.001, monitor.get("process_scan_interval_ms", 1000) / 1000.0),
-            max(0.001, monitor.get("display_refresh_interval_ms", 2000) / 1000.0),
+    def _monitor_interval(self) -> float:
+        """Return the current global monitor cadence in seconds."""
+        return max(
+            0.001,
+            config_module.monitor_interval_ms(self._config) / 1000.0,
         )
 
     def _wait_for_wake(self, timeout: float):
@@ -294,23 +293,13 @@ class MonitorThread(QThread):
         """Restore every process we touched back to its original affinity.
         Available for controlled shutdown or future administrative workflows.
         Processes that have since exited are silently skipped."""
-        online = utils.get_cpu_count()
-        all_cpus = set(range(online))
+        all_cpus = utils.get_online_cpus()
         count = 0
         for pid, orig in list(self._original_affinities.items()):
-            try:
-                # Restore to captured original; fall back to all CPUs
-                mask = orig if orig else all_cpus
-                os.sched_setaffinity(pid, mask)
-                # Restore all threads too
-                for tid in utils.get_process_tids(pid):
-                    try:
-                        os.sched_setaffinity(tid, mask)
-                    except OSError:
-                        pass
+            # Restore to captured original; fall back to all online CPUs.
+            mask = set(orig) if orig else all_cpus
+            if utils.set_process_affinity_set(pid, mask):
                 count += 1
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
         self._original_affinities.clear()
         self._emit_log(f"[Reset] Restored affinity on {count} processes to original state.")
 
@@ -318,10 +307,9 @@ class MonitorThread(QThread):
         """Store the current affinity of a process before we change it."""
         if pid in self._original_affinities:
             return
-        try:
-            self._original_affinities[pid] = frozenset(os.sched_getaffinity(pid))
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+        affinity = utils.get_thread_affinity_set(pid)
+        if affinity is not None:
+            self._original_affinities[pid] = frozenset(affinity)
 
     def _forget_monitor_state(self, pid: int):
         """Clear Monitor-owned state for one ended process identity."""
@@ -383,17 +371,12 @@ class MonitorThread(QThread):
         return not session or self._game_sessions.launch_has_started(
             session, int(info["pid"]), str(info["name"]))
 
-    def _sync_new_threads(self, *, include_defaults: bool = True):
-        """Apply process rules to TIDs first observed after process startup.
-
-        Rule-managed processes are checked on every enforcement pass.  Threads
-        normally inherit their creator's affinity, so the global default only
-        needs the slower display-cadence safety scan.
-        """
+    def _sync_new_threads(self):
+        """Apply policies to TIDs first observed on a global monitor pass."""
         default = self._default_affinity()
         for pid, info in list(self._process_cache.items()):
             matched = self._rule_engine.matches_process(info["name"])
-            if not matched and (not include_defaults or not default):
+            if not matched and not default:
                 continue
             current_tids = set(utils.get_process_tids(pid))
             if not current_tids:
@@ -478,11 +461,7 @@ class MonitorThread(QThread):
         return by_pid
 
     def run(self):
-        tick_interval = 0.1
-        last_enforce = 0.0
-        last_probalance = 0.0
-        last_snapshot = 0.0
-        last_full_enforce = 0.0
+        last_monitor = 0.0
         last_pb_tick = time.monotonic()
 
         snapshot: list[ProcessSnapshot] = []
@@ -491,113 +470,72 @@ class MonitorThread(QThread):
           try:
             # update_config() wakes this loop, so saved values replace the old
             # cadence without waiting for the previous interval to expire.
-            enforce_interval, process_scan_interval, snapshot_interval = (
-                self._monitor_intervals()
-            )
+            monitor_interval = self._monitor_interval()
             now = time.monotonic()
-
-            elapsed_enforce = now - last_enforce
-            elapsed_pb = now - last_probalance
-            elapsed_snap = now - last_snapshot
-
-            enforce_due = elapsed_enforce >= enforce_interval
-            pb_due = elapsed_pb >= process_scan_interval
-            snapshot_due = elapsed_snap >= snapshot_interval
-            full_enforce_due = now - last_full_enforce >= snapshot_interval
-
-            if not (enforce_due or pb_due or snapshot_due):
-                self._wait_for_wake(tick_interval)
+            elapsed = now - last_monitor
+            if elapsed < monitor_interval:
+                self._wait_for_wake(monitor_interval - elapsed)
                 continue
 
-            by_pid = {}
-            # Process discovery is needed for metrics and ProBalance, not for
-            # each fast enforcement pass over already-known processes.
-            if pb_due or snapshot_due:
-                try:
-                    # psutil collects these fields under one per-process
-                    # oneshot cache. The same prefetched values are reused by
-                    # identity synchronization and metric sampling below.
-                    attrs = [
-                        "pid", "name", "create_time", "cpu_percent", "nice",
-                    ]
-                    if snapshot_due:
-                        attrs.append("memory_info")
-                    procs = list(psutil.process_iter(attrs=attrs, ad_value=None))
-                except Exception:
-                    procs = []
-                by_pid = self._sync_processes(procs)
-                if self._game_sessions and self._game_sessions.sessions:
-                    self._game_memberships = self._game_sessions.refresh(
-                        self._observed_records()
-                    )
-
-            # Give newly seen matching processes a short rule burst.
-            if enforce_due:
-                for info in self._process_cache.values():
-                    if self._rules_ready(info) and (
-                        full_enforce_due
-                        or self._rule_engine.requires_continuous_enforcement(
-                            info["name"]
-                        )
-                    ):
-                        self._rule_engine.apply_to_process(info["pid"], info["name"])
-                if full_enforce_due:
-                    self._sync_new_threads(include_defaults=True)
-                    last_full_enforce = now
-                last_enforce = now
-
-            # Refresh CPU/nice only when ProBalance or the display needs them.
-            if pb_due or snapshot_due:
-                for pid, info in list(self._process_cache.items()):
-                    proc = by_pid.get(pid)
-                    if proc is not None:
-                        _update_proc_metrics(proc, info, include_details=snapshot_due)
-            if snapshot_due:
-                gpu_percent, gpu_memory = self._gpu_memory.sample()
-                for pid, info in self._process_cache.items():
-                    info["gpu_percent"] = gpu_percent.get(pid, 0.0)
-                    info["gpu_mem"] = gpu_memory.get(pid, 0)
-            # Avoid allocating a full immutable snapshot on enforcement-only
-            # passes. ProBalance and the GUI are its only consumers.
-            if pb_due or snapshot_due:
-                snapshot = self._observed_records()
-
-            # ProBalance every 1.0s
-            if pb_due:
-                pb_tick = now - last_pb_tick
-                last_pb_tick = now
-                self._probalance.tick(
-                    [info for info in snapshot
-                     if info["pid"] != os.getpid() and
-                     (info.pid, info.create_time) not in self._game_memberships],
-                    pb_tick,
+            try:
+                # psutil collects these fields under one per-process oneshot
+                # cache, shared by identity synchronization and metric sampling.
+                procs = list(psutil.process_iter(attrs=[
+                    "pid", "name", "create_time", "cpu_percent", "nice",
+                    "memory_info",
+                ], ad_value=None))
+            except Exception:
+                procs = []
+            by_pid = self._sync_processes(procs)
+            if self._game_sessions and self._game_sessions.sessions:
+                self._game_memberships = self._game_sessions.refresh(
+                    self._observed_records()
                 )
-                last_probalance = now
 
-            # Snapshot emit every 2.0s
-            if snapshot_due:
-                views = self._snapshot_records(snapshot)
-                self.process_snapshot_ready.emit(views)
-                try:
-                    raw = psutil.cpu_percent(percpu=True)
-                    # psutil returns only ONLINE CPUs in cpu-number order.
-                    # When CPUs are offline the list is shorter and
-                    # the indices no longer match CPU numbers.
-                    # Build a full-length list indexed by actual CPU number.
-                    import cpu_tools
-                    cpu_info = cpu_tools.get_cpu_info()
-                    online = sorted(cpu_info.online)
-                    total = cpu_info.cpu_count
-                    full   = [0.0] * total
-                    for idx, cpu_num in enumerate(online):
-                        if idx < len(raw) and cpu_num < total:
-                            full[cpu_num] = raw[idx]
-                    self.cpu_snapshot_ready.emit(full)
-                except Exception:
-                    pass
-                last_snapshot = now
+            for info in self._process_cache.values():
+                if self._rules_ready(info):
+                    self._rule_engine.apply_to_process(info["pid"], info["name"])
+            self._sync_new_threads()
 
-            self._wait_for_wake(tick_interval)
+            for pid, info in list(self._process_cache.items()):
+                proc = by_pid.get(pid)
+                if proc is not None:
+                    _update_proc_metrics(proc, info, include_details=True)
+            gpu_percent, gpu_memory = self._gpu_memory.sample()
+            for pid, info in self._process_cache.items():
+                info["gpu_percent"] = gpu_percent.get(pid, 0.0)
+                info["gpu_mem"] = gpu_memory.get(pid, 0)
+            snapshot = self._observed_records()
+
+            pb_tick = now - last_pb_tick
+            last_pb_tick = now
+            self._probalance.tick(
+                [info for info in snapshot
+                 if info["pid"] != os.getpid() and
+                 (info.pid, info.create_time) not in self._game_memberships],
+                pb_tick,
+            )
+
+            views = self._snapshot_records(snapshot)
+            self.process_snapshot_ready.emit(views)
+            try:
+                raw = psutil.cpu_percent(percpu=True)
+                # psutil returns only ONLINE CPUs in cpu-number order.
+                # When CPUs are offline the list is shorter and
+                # the indices no longer match CPU numbers.
+                # Build a full-length list indexed by actual CPU number.
+                import cpu_tools
+                cpu_info = cpu_tools.get_cpu_info()
+                online = sorted(cpu_info.online)
+                total = cpu_info.cpu_count
+                full = [0.0] * total
+                for idx, cpu_num in enumerate(online):
+                    if idx < len(raw) and cpu_num < total:
+                        full[cpu_num] = raw[idx]
+                self.cpu_snapshot_ready.emit(full)
+            except Exception:
+                pass
+            last_monitor = now
           except Exception as exc:
             log.exception("MonitorThread: unexpected error in main loop: %s", exc)
             # Keep error back-off interruptible for shutdown and settings saves.

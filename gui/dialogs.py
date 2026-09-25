@@ -640,7 +640,7 @@ class RuleEditDialog(QDialog):
         self._enabled_cb.setChecked(True)
         self._force_apply_cb = QCheckBox("Force apply continuously")
         self._force_apply_cb.setToolTip(
-            "Continuously reapplies this rule at the configured enforcement interval.\n"
+            "Continuously reapplies this rule at the global monitor interval.\n"
             "This bypasses the normal 10-attempt limit and will overwrite manual\n"
             "affinity or nice changes while the matching process is running."
         )

@@ -333,7 +333,7 @@ class CpuBarsWidget(QWidget):
 class CpuHistoryWidget(QWidget):
     """36px tall rolling area chart showing overall CPU history above the bars."""
 
-    _HISTORY_LEN = 120   # keep 120 samples (~4 min at 2s refresh)
+    _HISTORY_LEN = 120   # keep the last 120 global monitor samples
 
     def __init__(self, parent=None):
         super().__init__(parent)

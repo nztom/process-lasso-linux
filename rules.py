@@ -1,7 +1,6 @@
 """Rule dataclass and RuleEngine for matching and applying per-process rules."""
 from __future__ import annotations
 
-import os
 import re
 import uuid
 import logging
@@ -203,13 +202,6 @@ class RuleEngine:
         """Return True when at least one enabled rule matches a process name."""
         return any(rule.matches(proc_name) for rule in self._rules)
 
-    def requires_continuous_enforcement(self, proc_name: str) -> bool:
-        """Return True when a matching rule explicitly requests force-apply."""
-        return any(
-            rule.force_apply and rule.matches(proc_name)
-            for rule in self._rules
-        )
-
     def effective_policy(self, proc_name: str) -> EffectiveProcessPolicy:
         """Return the typed final policy produced by matching enabled rules.
 
@@ -320,8 +312,10 @@ class RuleEngine:
                 identity = thread_identity(
                     pid, tid, rule.rule_id, self._priority_state.boot_id
                 )
-                current = set(os.sched_getaffinity(tid))
+                current = utils.get_thread_affinity_set(tid)
             except (OSError, ValueError, ProcessLookupError):
+                continue
+            if current is None:
                 continue
             first_seen = identity not in self._affinity_seen
             self._affinity_seen.add(identity)
@@ -330,6 +324,15 @@ class RuleEngine:
             # critical game thread to one CPU) without violating the rule.
             if current and current <= desired:
                 continue
+            # Applications often pin a newly created thread just after it
+            # becomes visible in /proc. Recheck immediately before correcting
+            # so a concurrent in-bounds pin is not widened by our stale read.
+            latest = utils.get_thread_affinity_set(tid)
+            if latest is None:
+                continue
+            if latest and latest <= desired:
+                continue
+            current = latest
             attempts = self._affinity_drift_attempts.get(identity, 0)
             if not first_seen and not rule.force_apply and attempts >= RULE_APPLY_ATTEMPTS:
                 if identity not in self._affinity_released:

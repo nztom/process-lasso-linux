@@ -14,6 +14,7 @@ import subprocess
 
 import utils
 import app_identity
+import config as config_module
 import cpu_tools
 from gui.dialogs import AffinityDialog
 
@@ -114,36 +115,21 @@ class SettingsTab(QWidget):
         layout.addWidget(self._x3d_group)
 
         # ── Monitor intervals ───────────────────────────────────────────────
-        mon_group = QGroupBox("Monitor Intervals")
+        mon_group = QGroupBox("Monitoring")
         mon_form = QFormLayout(mon_group)
 
-        self._rule_interval = QSpinBox()
-        self._rule_interval.setRange(100, 10000)
-        self._rule_interval.setSuffix(" ms")
-        self._rule_interval.setValue(500)
-        self._rule_interval.setToolTip(
-            "How often force-apply rules are checked on known processes."
+        self._monitor_interval = QSpinBox()
+        self._monitor_interval.setRange(
+            config_module.MONITOR_INTERVAL_MIN_MS,
+            config_module.MONITOR_INTERVAL_MAX_MS,
         )
-        mon_form.addRow("Continuous rule enforce interval:", self._rule_interval)
-
-        self._process_scan_interval = QSpinBox()
-        self._process_scan_interval.setRange(250, 10000)
-        self._process_scan_interval.setSuffix(" ms")
-        self._process_scan_interval.setValue(1000)
-        self._process_scan_interval.setToolTip(
-            "How often processes are discovered and ProBalance samples CPU usage."
+        self._monitor_interval.setSuffix(" ms")
+        self._monitor_interval.setValue(config_module.MONITOR_INTERVAL_DEFAULT_MS)
+        self._monitor_interval.setToolTip(
+            "Global cadence for process and thread discovery, rule enforcement, "
+            "ProBalance, GPU/CPU metrics, Game Mode maintenance, and UI updates."
         )
-        mon_form.addRow("Process scan / ProBalance interval:",
-                        self._process_scan_interval)
-
-        self._display_interval = QSpinBox()
-        self._display_interval.setRange(500, 10000)
-        self._display_interval.setSuffix(" ms")
-        self._display_interval.setValue(2000)
-        self._display_interval.setToolTip(
-            "How often process and CPU data are sent to the UI."
-        )
-        mon_form.addRow("Display refresh interval:", self._display_interval)
+        mon_form.addRow("Global monitor interval:", self._monitor_interval)
 
         apply_mon_btn = QPushButton("Apply Monitor Settings")
         apply_mon_btn.clicked.connect(self._apply_monitor)
@@ -285,12 +271,9 @@ class SettingsTab(QWidget):
         self._default_affinity_edit.setEnabled(bool(default))
         self._default_affinity_cb.toggled.connect(self._default_affinity_edit.setEnabled)
 
-        mon = self._config.get("monitor", {})
-        self._rule_interval.setValue(mon.get("rule_enforce_interval_ms", 500))
-        self._process_scan_interval.setValue(
-            mon.get("process_scan_interval_ms", 1000)
+        self._monitor_interval.setValue(
+            config_module.monitor_interval_ms(self._config)
         )
-        self._display_interval.setValue(mon.get("display_refresh_interval_ms", 2000))
 
         # Autostart: check if systemd user service is enabled
         try:
@@ -333,9 +316,10 @@ class SettingsTab(QWidget):
         )
 
     def _apply_monitor(self):
-        self._config.setdefault("monitor", {})["rule_enforce_interval_ms"] = self._rule_interval.value()
-        self._config.setdefault("monitor", {})["process_scan_interval_ms"] = self._process_scan_interval.value()
-        self._config.setdefault("monitor", {})["display_refresh_interval_ms"] = self._display_interval.value()
+        monitor = self._config.setdefault("monitor", {})
+        monitor["interval_ms"] = self._monitor_interval.value()
+        for key in config_module.LEGACY_MONITOR_INTERVAL_KEYS:
+            monitor.pop(key, None)
         self.settings_changed.emit(self._config)
         QMessageBox.information(self, "Monitor Settings", "Settings applied.")
 

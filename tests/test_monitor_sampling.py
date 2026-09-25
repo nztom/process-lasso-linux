@@ -19,21 +19,26 @@ from rules import Rule, RuleEngine
 
 
 class MonitorSamplingTests(unittest.TestCase):
-    def test_monitor_intervals_update_and_wake_worker_immediately(self):
+    def test_global_monitor_interval_updates_and_wakes_worker_immediately(self):
         monitor = MonitorThread(RuleEngine(), ProBalance({}), {})
-        updated = {
-            "monitor": {
-                "rule_enforce_interval_ms": 250,
-                "process_scan_interval_ms": 750,
-                "display_refresh_interval_ms": 1500,
-            }
-        }
+        updated = {"monitor": {"interval_ms": 750}}
 
         with mock.patch.object(monitor._wake_event, "set") as wake:
             monitor.update_config(updated)
 
         wake.assert_called_once_with()
-        self.assertEqual(monitor._monitor_intervals(), (0.25, 0.75, 1.5))
+        self.assertEqual(monitor._monitor_interval(), 0.75)
+
+    def test_legacy_monitor_interval_prefers_process_scan_cadence(self):
+        monitor = MonitorThread(RuleEngine(), ProBalance({}), {
+            "monitor": {
+                "rule_enforce_interval_ms": 250,
+                "process_scan_interval_ms": 750,
+                "display_refresh_interval_ms": 1500,
+            }
+        })
+
+        self.assertEqual(monitor._monitor_interval(), 0.75)
 
     def test_identity_and_metrics_are_collected_separately(self):
         proc = psutil.Process(os.getpid())
@@ -226,21 +231,17 @@ class MonitorSamplingTests(unittest.TestCase):
         set_affinity.assert_called_once_with(201, "0-3")
 
     @mock.patch("monitor.utils.get_process_tids")
-    def test_default_only_processes_skip_fast_thread_scan(self, get_tids):
-        monitor = MonitorThread(
-            RuleEngine(),
-            ProBalance({}),
-            {"cpu": {"default_affinity": "0-3"}},
-        )
+    def test_processes_without_rules_or_default_skip_thread_scan(self, get_tids):
+        monitor = MonitorThread(RuleEngine(), ProBalance({}), {})
         monitor._process_cache = {200: {"pid": 200, "name": "worker"}}
         monitor._known_tids_by_pid = {200: {200}}
 
-        monitor._sync_new_threads(include_defaults=False)
+        monitor._sync_new_threads()
 
         get_tids.assert_not_called()
 
     @mock.patch("monitor.utils.get_process_tids", return_value=[200, 201])
-    def test_rule_processes_keep_fast_thread_scan(self, get_tids):
+    def test_rule_processes_scan_for_new_threads(self, get_tids):
         engine = RuleEngine()
         engine.add_rule(Rule(pattern="worker", affinity="0-3"))
         monitor = MonitorThread(engine, ProBalance({}), {})
@@ -248,7 +249,7 @@ class MonitorSamplingTests(unittest.TestCase):
         monitor._known_tids_by_pid = {200: {200}}
 
         with mock.patch.object(engine, "apply_to_thread") as apply_thread:
-            monitor._sync_new_threads(include_defaults=False)
+            monitor._sync_new_threads()
 
         get_tids.assert_called_once_with(200)
         apply_thread.assert_called_once_with(200, 201, "worker")

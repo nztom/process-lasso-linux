@@ -17,8 +17,8 @@ A KDE/Linux process manager inspired by Windows Process Lasso. Built with Python
 ## Asymmetric CPU controls
 
 CPU topology and feature support are detected once when the app starts. Dynamic
-state—CPU utilization, online CPUs, and the current X3D scheduler mode—is then
-updated at the configured monitor polling interval.
+state—processes, threads, rules, ProBalance, GPU/CPU utilization, online CPUs,
+and the current X3D scheduler mode—is updated at one global monitor interval.
 
 On supported asymmetric dual-CCD AMD X3D processors, Settings exposes the
 kernel scheduler's raw preferred-CCD modes. The selector is gated behind dual
@@ -95,7 +95,7 @@ Game Mode screen is shown.
 - Detected CPU topology
 - Current and configured AMD X3D scheduler preferred-CCD modes when supported
 - Default CPU affinity applied to all new processes
-- Monitor polling interval (0.5 s – 10 s)
+- Global monitor interval (0.5 s – 10 s)
 - Start minimized to tray on launch
 - `processlasso.service` systemd user-service autostart toggle (no root required)
 - Privileged helper status and install/update action

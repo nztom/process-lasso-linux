@@ -19,19 +19,14 @@ class ResetAllTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    @mock.patch("monitor.utils.get_process_tids", return_value=[101, 102])
-    @mock.patch("monitor.os.sched_setaffinity")
-    def test_monitor_restores_process_and_thread_affinities(self, set_affinity, _tids):
+    @mock.patch("monitor.utils.set_process_affinity_set", return_value=True)
+    def test_monitor_restores_process_and_thread_affinities(self, set_affinity):
         monitor = MonitorThread(RuleEngine(), ProBalance({}), {})
         monitor._original_affinities = {101: frozenset({0, 2})}
 
         monitor.reset_all_affinities()
 
-        self.assertEqual(
-            set_affinity.call_args_list,
-            [mock.call(101, frozenset({0, 2})), mock.call(101, frozenset({0, 2})),
-             mock.call(102, frozenset({0, 2}))],
-        )
+        set_affinity.assert_called_once_with(101, {0, 2})
         self.assertEqual(monitor._original_affinities, {})
 
     @mock.patch("monitor.utils.set_affinity")
