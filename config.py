@@ -24,12 +24,12 @@ DEFAULT_GAME_ENVIRONMENT = [
 ]
 
 DEFAULT_CONFIG = {
-    "version": 2,
-    "rules": [],
+    "version": 3,
+    "process_policies": [],
     "cpu": {
-        # Applied to every process not matched by a specific rule.
+        # Applied to every process without an exact-name affinity policy.
         # e.g. "8-15,24-31" pushes all background processes to CCD1 while
-        # rules for steam/games keep them on CCD0 (3D V-Cache die).
+        # per-process policies can keep games on CCD0 (3D V-Cache die).
         # null = disabled.
         "default_affinity": None,
     },
@@ -148,9 +148,12 @@ def load() -> dict:
             with open(CONFIG_FILE, "r") as f:
                 data = json.load(f)
             merged = _deep_merge(DEFAULT_CONFIG, data)
-            # Version 2 adds the Game Mode catalog and hardware-aware defaults;
-            # existing rules and unrelated settings remain lossless.
-            merged["version"] = 2
+            # Version 3 replaces user-authored rules with exact-name policies
+            # managed exclusively through the Processes tab.
+            merged["version"] = 3
+            retired_rules = "rules" in data
+            merged.pop("rules", None)
+            merged.setdefault("process_policies", [])
             needs_game_defaults = not merged.get("game_mode", {}).get(
                 "defaults_initialized", False
             )
@@ -161,7 +164,7 @@ def load() -> dict:
             )
             merged = _initialize_game_mode_defaults(merged)
             if (needs_game_defaults or needs_game_environment
-                    or needs_game_wrappers or monitor_migrated):
+                    or needs_game_wrappers or monitor_migrated or retired_rules):
                 save(merged)
             return merged
         except (json.JSONDecodeError, OSError):

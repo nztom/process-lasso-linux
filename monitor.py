@@ -1,4 +1,4 @@
-"""MonitorThread: background QThread that scans processes and enforces rules."""
+"""Background process scanner and persistent-policy enforcer."""
 from __future__ import annotations
 
 import os
@@ -192,11 +192,8 @@ def _safe_proc_info(proc: psutil.Process) -> ProcessInfo | None:
 
 class MonitorThread(QThread):
     """
-    Background thread that:
-    - Every 0.5s: enforces rules explicitly marked force-apply
-    - Every 1–2s: discovers processes and runs ProBalance (display-capped)
-    - Every 2.0s: checks normal rule drift and emits a display snapshot
-    - On new PID: applies matching rule, or default affinity if no rule matched
+    Run discovery, persistent policies, ProBalance, metrics, and snapshots on
+    the configured global monitor interval.
     """
 
     process_snapshot_ready = pyqtSignal(list)    # list[ProcessPolicyView]
@@ -267,7 +264,7 @@ class MonitorThread(QThread):
             except OSError:
                 pass
 
-    def set_manual_rule_override(self, pid: int):
+    def set_manual_policy_override(self, pid: int):
         """Stop the startup burst after a manual affinity or nice change."""
         self._manually_overridden_pids.add(pid)
         self._rule_engine.suppress_pid(pid)
@@ -345,7 +342,7 @@ class MonitorThread(QThread):
         return views
 
     def _apply_new_pid(self, info: ProcessInfo):
-        """Apply rules or default affinity to a newly seen process."""
+        """Apply a saved process policy or the global default affinity."""
         pid = info["pid"]
         name = info["name"]
         self._known_tids_by_pid.setdefault(pid, set(utils.get_process_tids(pid)))
@@ -363,7 +360,7 @@ class MonitorThread(QThread):
                 if utils.set_affinity(pid, default):
                     self._emit_log(f"[Default] affinity={default} → {name}({pid})")
 
-    def _rules_ready(self, info) -> bool:
+    def _policies_ready(self, info) -> bool:
         if not self._game_sessions:
             return True
         session = self._game_sessions.session_for_pid(
@@ -384,7 +381,7 @@ class MonitorThread(QThread):
             known_tids = self._known_tids_by_pid.setdefault(pid, set())
             new_tids = current_tids - known_tids
             for tid in sorted(new_tids):
-                if not self._rules_ready(info):
+                if not self._policies_ready(info):
                     continue
                 if matched:
                     self._rule_engine.apply_to_thread(pid, tid, info["name"])
@@ -493,7 +490,7 @@ class MonitorThread(QThread):
                 )
 
             for info in self._process_cache.values():
-                if self._rules_ready(info):
+                if self._policies_ready(info):
                     self._rule_engine.apply_to_process(info["pid"], info["name"])
             self._sync_new_threads()
 

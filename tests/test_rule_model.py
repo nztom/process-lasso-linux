@@ -13,6 +13,31 @@ from rules import Rule, RuleEngine
 
 
 class EffectivePolicyMergeTests(unittest.TestCase):
+    def test_exact_process_policies_round_trip_without_rule_metadata(self):
+        engine = RuleEngine()
+        engine.set_persistent_policy(
+            "game.exe", "affinity", "CPU Affinity", affinity="0-3"
+        )
+        engine.set_persistent_policy(
+            "game.exe", "nice", "CPU Priority",
+            nice=0, nice_mode="offset", nice_offset=-5,
+            nice_floor=-10, nice_ceiling=15,
+        )
+
+        stored = engine.to_policy_list()
+        restored = RuleEngine()
+        restored.load_policies(stored)
+
+        self.assertEqual({entry["process_name"] for entry in stored}, {"game.exe"})
+        self.assertTrue(all("match_type" not in entry for entry in stored))
+        self.assertEqual(
+            restored.effective_policy("GAME.EXE"),
+            EffectiveProcessPolicy(
+                affinity="0-3",
+                nice=OffsetNicePolicy(-5, floor=-10, ceiling=15),
+            ),
+        )
+
     def test_invalid_imported_io_policy_is_rejected_during_load(self):
         engine = RuleEngine()
 

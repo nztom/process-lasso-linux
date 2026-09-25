@@ -47,11 +47,11 @@ class SettingsTab(QWidget):
         cpu_layout = QVBoxLayout(cpu_group)
 
         desc = QLabel(
-            "Applied to every process that doesn't match a specific rule.\n"
+            "Applied to every process without an Always affinity setting.\n"
             "Typical 7950X3D setup:\n"
             "  • Default → CCD1 (8-15,24-31)  — background processes\n"
-            "  • Rule: steam (exact) → CCD0 (0-7,16-23)  — game + all children inherit\n"
-            "  • Rule: specific game (exact) → further override if needed"
+            "  • Process Always affinity → CCD0 (0-7,16-23)\n"
+            "  • Game Mode → per-game launch affinity and priority"
         )
         desc.setWordWrap(True)
         cpu_layout.addWidget(desc)

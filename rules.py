@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import uuid
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 import utils
@@ -109,6 +109,42 @@ class Rule:
             "force_apply": self.force_apply,
         }
 
+    @classmethod
+    def from_policy_dict(cls, data: dict) -> "Rule":
+        """Load the exact-name policy format managed by the Processes tab."""
+        process_name = str(data.get("process_name", "")).strip()
+        if not process_name:
+            raise ValueError("process_name is required")
+        return cls(
+            rule_id=str(data.get("policy_id", uuid.uuid4())),
+            name=process_name,
+            pattern=process_name,
+            match_type="exact",
+            affinity=data.get("affinity"),
+            nice=data.get("nice"),
+            nice_mode=data.get("nice_mode", "absolute"),
+            nice_offset=int(data.get("nice_offset", 0)),
+            nice_floor=int(data.get("nice_floor", -15)),
+            nice_ceiling=int(data.get("nice_ceiling", 19)),
+            ionice_class=data.get("ionice_class"),
+            ionice_level=data.get("ionice_level"),
+        )
+
+    def to_policy_dict(self) -> dict:
+        """Serialize only the exact-name policy surface supported by the UI."""
+        return {
+            "policy_id": self.rule_id,
+            "process_name": self.pattern,
+            "affinity": self.affinity,
+            "nice": self.nice,
+            "nice_mode": self.nice_mode,
+            "nice_offset": self.nice_offset,
+            "nice_floor": self.nice_floor,
+            "nice_ceiling": self.nice_ceiling,
+            "ionice_class": self.ionice_class,
+            "ionice_level": self.ionice_level,
+        }
+
     def matches(self, proc_name: str) -> bool:
         """Return True if proc_name matches this rule."""
         if not self.enabled or not self.pattern:
@@ -170,11 +206,90 @@ class RuleEngine:
         self._affinity_drift_attempts.clear()
         self._affinity_released.clear()
 
+    def load_policies(self, policies: list[dict]):
+        """Load current exact-name process policies only."""
+        loaded = []
+        for raw in policies:
+            try:
+                loaded.append(Rule.from_policy_dict(raw))
+            except (TypeError, ValueError) as exc:
+                log.warning("Ignoring invalid process policy: %s", exc)
+        self._rules = loaded
+        self._attempts_by_rule.clear()
+        self._suppressed_rule_pids.clear()
+        self._affinity_seen.clear()
+        self._affinity_drift_attempts.clear()
+        self._affinity_released.clear()
+
     def get_rules(self) -> list[Rule]:
         return list(self._rules)
 
     def add_rule(self, rule: Rule):
         self._rules.append(rule)
+
+    def upsert_rule(self, rule: Rule):
+        """Add or replace a rule while clearing its stale runtime state."""
+        if any(existing.rule_id == rule.rule_id for existing in self._rules):
+            self.update_rule(rule)
+        else:
+            self.add_rule(rule)
+
+    def set_persistent_policy(
+        self, proc_name: str, policy: str, label: str, **changes
+    ) -> Rule:
+        """Create or update one exact-name policy behind an ``Always`` action.
+
+        Updating an existing combined rule preserves its other policy fields.
+        This keeps the UI independent from the underlying rule representation.
+        """
+        if policy not in {"affinity", "nice", "ionice_class"}:
+            raise ValueError(f"unsupported persistent policy: {policy}")
+        existing = next((
+            rule for rule in reversed(self._rules)
+            if rule.pattern.casefold() == proc_name.casefold()
+            and rule.match_type == "exact"
+            and getattr(rule, policy) is not None
+        ), None)
+        if existing is None:
+            rule = Rule(
+                name=f"{proc_name} — {label}", pattern=proc_name,
+                match_type="exact", **changes,
+            )
+        else:
+            rule = replace(existing, enabled=True, **changes)
+        self.upsert_rule(rule)
+        return rule
+
+    def clear_persistent_policy(self, proc_name: str, policy: str | None = None) -> int:
+        """Clear matching saved policy fields without exposing rule mechanics."""
+        if policy not in {None, "affinity", "nice", "ionice_class"}:
+            raise ValueError(f"unsupported persistent policy: {policy}")
+        changed = 0
+        for rule in list(self._rules):
+            if not rule.pattern_matches(proc_name):
+                continue
+            if policy is None:
+                self.remove_rule(rule.rule_id)
+                changed += 1
+                continue
+            if getattr(rule, policy) is None:
+                continue
+            changes = {policy: None}
+            if policy == "nice":
+                changes.update(nice_mode="absolute", nice_offset=0)
+            elif policy == "ionice_class":
+                changes["ionice_level"] = None
+            updated = replace(rule, **changes)
+            if all((
+                updated.affinity is None,
+                updated.nice is None,
+                updated.ionice_class is None,
+            )):
+                self.remove_rule(rule.rule_id)
+            else:
+                self.update_rule(updated)
+            changed += 1
+        return changed
 
     def remove_rule(self, rule_id: str):
         self._rules = [r for r in self._rules if r.rule_id != rule_id]
@@ -197,6 +312,9 @@ class RuleEngine:
 
     def to_dict_list(self) -> list[dict]:
         return [r.to_dict() for r in self._rules]
+
+    def to_policy_list(self) -> list[dict]:
+        return [policy.to_policy_dict() for policy in self._rules]
 
     def matches_process(self, proc_name: str) -> bool:
         """Return True when at least one enabled rule matches a process name."""

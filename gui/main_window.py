@@ -16,7 +16,6 @@ from rules import RuleEngine
 from probalance import ProBalance
 from monitor import MonitorThread
 from gui.process_table import ProcessTable
-from gui.rules_panel import RulesPanel
 from gui.probalance_tab import ProBalanceTab
 from gui.settings_tab import SettingsTab
 from gui.cpu_bars import CpuBarsWidget, CpuHistoryWidget
@@ -37,7 +36,7 @@ class MainWindow(QMainWindow):
         self._app = app
         self._config = cfg_module.load()
         self._rule_engine = RuleEngine()
-        self._rule_engine.load_rules(self._config.get("rules", []))
+        self._rule_engine.load_policies(self._config.get("process_policies", []))
         self._probalance = ProBalance(self._config.get("probalance", {}))
         self._game_sessions = GameSessionManager(
             self._config, save_callback=lambda: cfg_module.save(self._config)
@@ -118,9 +117,10 @@ class MainWindow(QMainWindow):
             rule_engine=self._rule_engine,
             log_callback=self._append_log,
         )
-        self._proc_table.rule_add_requested.connect(self._on_rule_add_from_table)
-        self._proc_table.rule_remove_requested.connect(self._on_rules_removed_from_table)
-        self._proc_table.rule_value_manually_changed.connect(self._on_rule_value_manual_change)
+        self._proc_table.persistent_policy_changed.connect(self._on_policies_changed)
+        self._proc_table.policy_value_manually_changed.connect(
+            self._on_policy_value_manual_change
+        )
         self._proc_table.probalance_exclude_requested.connect(
             self._on_probalance_exclude_requested
         )
@@ -148,29 +148,21 @@ class MainWindow(QMainWindow):
 
         self._tabs.addTab(proc_container, "Processes")
 
-        # Tab 2: Rules
-        self._rules_panel = RulesPanel(self._rule_engine)
-        self._rules_panel.rules_changed.connect(self._on_rules_changed)
-        self._tabs.addTab(self._rules_panel, "Rules")
-
-        # Tab 3: ProBalance
+        # Persistent per-process policies are managed from the Processes tab.
         self._pb_tab = ProBalanceTab(self._config.get("probalance", {}))
         self._pb_tab.settings_changed.connect(self._on_pb_settings_changed)
         self._tabs.addTab(self._pb_tab, "ProBalance")
 
-        # Tab 4: Game Mode
         self._game_tab = GameModeTab(
             self._config.setdefault("game_mode", {}), self._game_sessions
         )
         self._game_tab.settings_changed.connect(self._on_game_settings_changed)
         self._tabs.addTab(self._game_tab, "Game Mode")
 
-        # Tab 5: Settings
         self._settings_tab = SettingsTab(self._config)
         self._settings_tab.settings_changed.connect(self._on_settings_changed)
         self._tabs.addTab(self._settings_tab, "Settings")
 
-        # Tab 6: Log
         log_widget = QWidget()
         log_layout = QVBoxLayout(log_widget)
 
@@ -264,12 +256,11 @@ class MainWindow(QMainWindow):
         avg = sum(percpu) / len(percpu) if percpu else 0.0
         self._tray.setToolTip(f"Process Lasso — CPU avg {avg:.0f}%")
 
-    def _on_rules_changed(self):
+    def _on_policies_changed(self):
         self._save_config()
-        self._proc_table.refresh_rule_columns()
-        # Re-apply rules + default to all running processes so that processes
-        # previously matched by a now-deleted or changed rule don't stay stuck
-        # with a stale affinity.
+        self._proc_table.refresh_policy_columns()
+        # Re-evaluate all running processes so removed or changed policies do
+        # not leave a stale effective view or default-affinity decision.
         self._monitor.reapply_all_defaults()
 
     def _on_user_filter_changed(self, index: int):
@@ -328,20 +319,8 @@ class MainWindow(QMainWindow):
             self._proc_table.set_user_filter("")
 
     @pyqtSlot(int)
-    def _on_rule_value_manual_change(self, pid: int):
-        self._monitor.set_manual_rule_override(pid)
-
-    def _on_rule_add_from_table(self, rule):
-        self._rules_panel.add_rule_direct(rule)
-        self._tabs.setCurrentIndex(1)  # Switch to Rules tab
-
-    @pyqtSlot(list)
-    def _on_rules_removed_from_table(self, rule_ids: list[str]):
-        for rule_id in rule_ids:
-            self._rule_engine.remove_rule(rule_id)
-        self._rules_panel.refresh()
-        self._save_config()
-        self._proc_table.refresh_rule_columns()
+    def _on_policy_value_manual_change(self, pid: int):
+        self._monitor.set_manual_policy_override(pid)
 
     @pyqtSlot(dict)
     def _on_pb_settings_changed(self, pb_cfg: dict):
@@ -369,7 +348,8 @@ class MainWindow(QMainWindow):
         self._save_config()
 
     def _save_config(self):
-        self._config["rules"] = self._rule_engine.to_dict_list()
+        self._config["process_policies"] = self._rule_engine.to_policy_list()
+        self._config.pop("rules", None)
         cfg_module.save(self._config)
 
     def _toggle_window(self):

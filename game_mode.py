@@ -70,7 +70,7 @@ def apply_launch_policy(pid: int, policy: dict) -> list[str]:
         if isinstance(nice, int):
             target = nice
         elif nice.get("type", "absolute") == "offset":
-            current = os.getpriority(os.PRIO_PROCESS, pid)
+            current = utils.get_thread_nice(pid)
             target = max(int(nice.get("floor", -15)), min(
                 int(nice.get("ceiling", 19)), current + int(nice["offset"])))
         else:

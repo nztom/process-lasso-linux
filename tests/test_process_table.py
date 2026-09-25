@@ -22,6 +22,7 @@ from gui.process_table import (
     _parse_thread_cpu_stat,
 )
 from process_info import ProcessPolicyView, ProcessSnapshot, ThreadSnapshot
+from policy_models import OffsetNicePolicy
 from rules import Rule, RuleEngine
 
 
@@ -172,16 +173,16 @@ class ProcessTableTests(unittest.TestCase):
     def test_always_rule_uses_exact_process_name(self):
         engine = RuleEngine()
         table = ProcessTable(engine, None)
-        spy = QSignalSpy(table.rule_add_requested)
+        spy = QSignalSpy(table.persistent_policy_changed)
 
-        table._emit_always_rule(
+        table._save_always_policy(
             self._view(engine, self._process(1234, "blackdesert64.exe", "user")),
             "CPU Priority",
             nice=-10,
         )
 
         self.assertEqual(len(spy), 1)
-        rule = spy[0][0]
+        rule = engine.get_rules()[0]
         self.assertEqual(rule.pattern, "blackdesert64.exe")
         self.assertEqual(rule.match_type, "exact")
         self.assertEqual(rule.nice, -10)
@@ -247,7 +248,7 @@ class ProcessTableTests(unittest.TestCase):
         messages = []
         engine = RuleEngine()
         table = ProcessTable(engine, messages.append)
-        changed = QSignalSpy(table.rule_value_manually_changed)
+        changed = QSignalSpy(table.policy_value_manually_changed)
 
         table._do_set_nice(self._view(
             engine, self._process(42, "game.exe", "user") | {"nice": 5}
@@ -285,6 +286,29 @@ class ProcessTableTests(unittest.TestCase):
             -6, table, "game.exe", initial_mode="offset", initial_offset=-5,
         )
 
+    @mock.patch("gui.process_table.NicePriorityDialog")
+    def test_always_priority_action_saves_exact_offset_policy(self, dialog_class):
+        dialog = dialog_class.return_value
+        dialog.exec.return_value = dialog_class.DialogCode.Accepted
+        dialog.get_mode.return_value = "offset"
+        dialog.get_nice.return_value = -3
+        dialog.get_offset.return_value = -8
+        dialog.get_floor.return_value = -12
+        dialog.get_ceiling.return_value = 15
+        engine = RuleEngine()
+        table = ProcessTable(engine, None)
+        changed = QSignalSpy(table.persistent_policy_changed)
+
+        table._do_set_always_priority(self._view(
+            engine, self._process(42, "game.exe", "user") | {"nice": 5}
+        ))
+
+        self.assertEqual(len(changed), 1)
+        self.assertEqual(
+            engine.effective_policy("game.exe").nice,
+            OffsetNicePolicy(-8, floor=-12, ceiling=15),
+        )
+
     @mock.patch("gui.process_table.utils.set_nice", return_value=False)
     @mock.patch("gui.process_table.NicePriorityDialog")
     def test_failed_current_priority_offset_does_not_emit_manual_change(
@@ -298,7 +322,7 @@ class ProcessTableTests(unittest.TestCase):
         messages = []
         engine = RuleEngine()
         table = ProcessTable(engine, messages.append)
-        changed = QSignalSpy(table.rule_value_manually_changed)
+        changed = QSignalSpy(table.policy_value_manually_changed)
 
         table._do_set_nice(self._view(
             engine, self._process(42, "game.exe", "user") | {"nice": 5}
@@ -345,7 +369,7 @@ class ProcessTableTests(unittest.TestCase):
         rule.affinity = "4-7"
         rule.nice = -5
         engine.update_rule(rule)
-        table.refresh_rule_columns()
+        table.refresh_policy_columns()
 
         self.assertEqual(table.item(0, table.AFFINITY_ALWAYS_COLUMN).text(), "4-7")
         self.assertEqual(table.item(0, table.NICE_ALWAYS_COLUMN).text(), "Absolute -5")
@@ -369,7 +393,7 @@ class ProcessTableTests(unittest.TestCase):
 
         rule.nice = -5
         engine.update_rule(rule)
-        table.refresh_rule_columns()
+        table.refresh_policy_columns()
 
         rebuilt = table._snapshot[0]
         self.assertIsInstance(rebuilt, ProcessPolicyView)
@@ -616,15 +640,16 @@ class ProcessTableTests(unittest.TestCase):
         )
         engine.add_rule(existing)
         table = ProcessTable(engine, None)
-        spy = QSignalSpy(table.rule_add_requested)
+        spy = QSignalSpy(table.persistent_policy_changed)
 
-        table._emit_always_rule(
+        table._save_always_policy(
             self._view(engine, self._process(42, "game.exe", "user")),
             "CPU Affinity",
             affinity="4-7",
         )
 
-        updated = spy[0][0]
+        self.assertEqual(len(spy), 1)
+        updated = engine.get_rules()[0]
         self.assertEqual(updated.rule_id, existing.rule_id)
         self.assertEqual(updated.affinity, "4-7")
         self.assertTrue(updated.force_apply)
@@ -633,33 +658,39 @@ class ProcessTableTests(unittest.TestCase):
         "gui.process_table.QMessageBox.question",
         return_value=QMessageBox.StandardButton.Yes,
     )
-    def test_clear_process_rule_requests_removal_without_applying_changes(self, question):
+    def test_clear_process_policy_updates_storage_without_applying_live_change(self, question):
         engine = RuleEngine()
         matching = Rule(name="Game priority", pattern="game.exe", match_type="exact", nice=-5)
         unrelated = Rule(name="Other", pattern="other.exe", match_type="exact", nice=5)
         engine.add_rule(matching)
         engine.add_rule(unrelated)
         table = ProcessTable(engine, None)
-        spy = QSignalSpy(table.rule_remove_requested)
+        spy = QSignalSpy(table.persistent_policy_changed)
 
-        table._do_clear_rules(
+        table._do_clear_persistent(
             self._view(engine, self._process(42, "game.exe", "user")),
-            [matching.rule_id],
+            "nice",
         )
 
-        self.assertEqual(spy[0][0], [matching.rule_id])
-        self.assertEqual(engine.get_rules(), [matching, unrelated])
+        self.assertEqual(len(spy), 1)
+        self.assertEqual(engine.get_rules(), [unrelated])
         question.assert_called_once()
 
-    def test_clear_process_rule_only_lists_matching_rules(self):
+    def test_clear_process_policy_preserves_other_fields(self):
         engine = RuleEngine()
-        matching = Rule(name="Game", pattern="game.exe", match_type="exact")
+        matching = Rule(
+            name="Game", pattern="game.exe", match_type="exact",
+            affinity="0-3", nice=-5,
+        )
         engine.add_rule(matching)
         engine.add_rule(Rule(name="Other", pattern="other.exe", match_type="exact"))
 
-        table = ProcessTable(engine, None)
+        changed = engine.clear_persistent_policy("game.exe", "nice")
 
-        self.assertEqual(table._matching_rules("game.exe"), [matching])
+        self.assertEqual(changed, 1)
+        updated = engine.get_rules()[0]
+        self.assertEqual(updated.affinity, "0-3")
+        self.assertIsNone(updated.nice)
 
     def test_exclude_from_probalance_emits_process_name(self):
         engine = RuleEngine()

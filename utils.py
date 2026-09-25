@@ -144,74 +144,59 @@ def _cpuset_to_cpulist(cpus: set[int]) -> str:
     return ",".join(ranges)
 
 
-def set_nice(pid: int, nice: int) -> bool:
-    """Set nice priority via renice.
-    Negative values require root and are delegated to the narrowly scoped
-    privileged helper. Non-negative values continue to run unprivileged.
-    Returns True on success."""
+def _set_thread_nice_batch(tids: list[int], nice: int) -> set[int]:
+    """Single low-level niceness write boundary for process and thread callers."""
+    tids = sorted(set(tids))
+    if not tids or any(tid <= 0 for tid in tids) or not -20 <= nice <= 19:
+        log.debug("invalid niceness request tids=%s nice=%s", tids, nice)
+        return set()
+
     if nice < 0:
         import nice_helper
 
-        return nice_helper.set_negative_nice(pid, nice)
+        return nice_helper.set_negative_nice_threads(tids, nice)
 
-    tids = get_process_tids(pid)
-    if not tids:
-        return False
     try:
         result = subprocess.run(
-            ["renice", "-n", str(nice), "-p", *[str(tid) for tid in tids]],
+            ["renice", "-n", str(nice), "-p", *map(str, tids)],
             capture_output=True,
             text=True,
             timeout=5,
         )
-        if result.returncode == 0:
-            log.debug("renice pid=%d nice=%d: OK", pid, nice)
-            return True
-        log.warning("renice pid=%d nice=%d failed: %s", pid, nice, result.stderr.strip())
-        return False
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        log.warning("renice error pid=%d: %s", pid, e)
-        return False
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        log.warning("renice nice=%d failed: %s", nice, exc)
+        return set()
+
+    if result.returncode == 0:
+        log.debug("renice nice=%d: applied to %d thread(s)", nice, len(tids))
+        return set(tids)
+    log.warning("renice nice=%d failed: %s", nice, result.stderr.strip())
+    return set()
+
+
+def set_process_nice(pid: int, nice: int) -> bool:
+    """Apply one exact nice value to every currently visible process thread."""
+    return bool(_set_thread_nice_batch(get_process_tids(pid), nice))
+
+
+def set_nice(pid: int, nice: int) -> bool:
+    """Compatibility adapter for applying process-wide niceness."""
+    return set_process_nice(pid, nice)
 
 
 def set_thread_nice(tid: int, nice: int) -> bool:
-    """Set nice priority on one newly observed thread."""
-    if nice < 0:
-        import nice_helper
-
-        return nice_helper.set_negative_nice_thread(tid, nice)
-    try:
-        result = subprocess.run(
-            ["renice", "-n", str(nice), "-p", str(tid)],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return False
+    """Apply one exact nice value to a single thread."""
+    return tid in _set_thread_nice_batch([tid], nice)
 
 
 def get_thread_nice(tid: int) -> int:
+    """Read one live thread's nice value."""
     return os.getpriority(os.PRIO_PROCESS, tid)
 
 
 def set_nice_threads(tids: list[int], nice: int) -> set[int]:
-    """Apply one target to a thread batch and return the successful TIDs."""
-    tids = sorted(set(tids))
-    if not tids or not -20 <= nice <= 19:
-        return set()
-    if nice < 0:
-        import nice_helper
-        return nice_helper.set_negative_nice_threads(tids, nice)
-    try:
-        result = subprocess.run(
-            ["renice", "-n", str(nice), "-p", *map(str, tids)],
-            capture_output=True, text=True, timeout=5,
-        )
-        return set(tids) if result.returncode == 0 else set()
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return set()
+    """Compatibility adapter for a thread batch, returning successful TIDs."""
+    return _set_thread_nice_batch(tids, nice)
 
 
 def set_ionice(pid: int, ionice_class: int, ionice_level: int | None = None) -> bool:

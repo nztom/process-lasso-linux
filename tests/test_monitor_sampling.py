@@ -266,7 +266,7 @@ class MonitorSamplingTests(unittest.TestCase):
         )
         monitor._process_cache = {200: {"pid": 200, "name": "worker"}}
         monitor._known_tids_by_pid = {200: {200}}
-        monitor.set_manual_rule_override(200)
+        monitor.set_manual_policy_override(200)
 
         monitor._sync_new_threads()
 

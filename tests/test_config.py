@@ -12,6 +12,30 @@ import config
 
 class MonitorConfigTests(unittest.TestCase):
     @mock.patch("cpu_tools.get_cpu_info")
+    def test_load_retires_legacy_rules_without_migrating_them(self, cpu_info):
+        cpu_info.return_value.topology.preferred = set()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = Path(temp_dir) / "config.json"
+            config_file.write_text(json.dumps({
+                "version": 2,
+                "rules": [{"pattern": "game", "match_type": "contains"}],
+                "game_mode": {
+                    "defaults_initialized": True,
+                    "wrappers": [],
+                    "environment": [],
+                },
+            }))
+            with mock.patch.object(config, "CONFIG_DIR", Path(temp_dir)), \
+                    mock.patch.object(config, "CONFIG_FILE", config_file):
+                loaded = config.load()
+                persisted = json.loads(config_file.read_text())
+
+        self.assertEqual(loaded["version"], 3)
+        self.assertEqual(loaded["process_policies"], [])
+        self.assertNotIn("rules", loaded)
+        self.assertNotIn("rules", persisted)
+
+    @mock.patch("cpu_tools.get_cpu_info")
     def test_load_migrates_legacy_intervals_to_process_scan_value(self, cpu_info):
         cpu_info.return_value.topology.preferred = set()
         with tempfile.TemporaryDirectory() as temp_dir:

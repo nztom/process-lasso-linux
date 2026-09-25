@@ -26,7 +26,7 @@ from policy_models import (
     format_io_priority_policy,
     format_nice_policy,
 )
-from gui.dialogs import AffinityDialog, NicePriorityDialog, IoNiceDialog, RuleEditDialog
+from gui.dialogs import AffinityDialog, NicePriorityDialog, IoNiceDialog
 from gui.table_layout import configure_columns, reset_columns
 
 
@@ -107,9 +107,8 @@ class ThreadSampler:
 class ProcessTable(QTableWidget):
     """Sortable process table with right-click context menu."""
 
-    rule_add_requested = pyqtSignal(object)  # emits Rule
-    rule_remove_requested = pyqtSignal(list)  # rule IDs; does not reset live process
-    rule_value_manually_changed = pyqtSignal(int)  # pid — stop its startup rule burst
+    persistent_policy_changed = pyqtSignal()
+    policy_value_manually_changed = pyqtSignal(int)  # pid — preserve manual change
     probalance_exclude_requested = pyqtSignal(str)  # process name pattern
     probalance_include_requested = pyqtSignal(str)  # process name to un-exempt
     available_users_changed = pyqtSignal(list)
@@ -288,8 +287,8 @@ class ProcessTable(QTableWidget):
             self.available_users_changed.emit(users)
         self._refresh_display()
 
-    def refresh_rule_columns(self):
-        """Immediately redraw effective Always values after rule changes."""
+    def refresh_policy_columns(self):
+        """Immediately redraw effective Always values after policy changes."""
         if self._rule_engine is not None:
             self._snapshot = [
                 ProcessPolicyView(
@@ -573,15 +572,15 @@ class ProcessTable(QTableWidget):
             menu.addSeparator()
         affinity_menu = menu.addMenu("CPU Affinity")
         affinity_menu.addAction("Current…", lambda: self._do_set_affinity(proc))
-        affinity_menu.addAction("Always…", lambda: self._do_add_affinity_rule(proc))
+        affinity_menu.addAction("Always…", lambda: self._do_set_always_affinity(proc))
 
         priority_menu = menu.addMenu("CPU Priority")
         priority_menu.addAction("Current…", lambda: self._do_set_nice(proc))
-        priority_menu.addAction("Always…", lambda: self._do_add_priority_rule(proc))
+        priority_menu.addAction("Always…", lambda: self._do_set_always_priority(proc))
 
         io_menu = menu.addMenu("I/O Priority")
         io_menu.addAction("Current…", lambda: self._do_set_ionice(proc))
-        io_menu.addAction("Always…", lambda: self._do_add_ionice_rule(proc))
+        io_menu.addAction("Always…", lambda: self._do_set_always_ionice(proc))
         menu.addSeparator()
         if self._is_probalance_exempt(proc.observed.name):
             menu.addAction(
@@ -594,27 +593,27 @@ class ProcessTable(QTableWidget):
                 lambda: self._do_exclude_from_probalance(proc),
             )
         menu.addSeparator()
-        menu.addAction(
-            f"Add Rule for '{proc.observed.name}'...",
-            lambda: self._do_add_rule(proc)
-        )
-        clear_menu = menu.addMenu("Clear Rules")
-        matching_rules = self._matching_rules(proc.observed.name)
-        clear_menu.setEnabled(bool(matching_rules))
-        for rule in matching_rules:
+        clear_menu = menu.addMenu("Clear Always Settings")
+        policy = proc.effective_policy
+        clear_menu.setEnabled(any((policy.affinity, policy.nice, policy.ionice)))
+        if policy.affinity is not None:
             clear_menu.addAction(
-                rule.name or rule.pattern,
-                lambda checked=False, rule_id=rule.rule_id: self._do_clear_rules(
-                    proc, [rule_id]
-                ),
+                "CPU Affinity", lambda: self._do_clear_persistent(proc, "affinity")
             )
-        if len(matching_rules) > 1:
+        if policy.nice is not None:
+            clear_menu.addAction(
+                "CPU Priority", lambda: self._do_clear_persistent(proc, "nice")
+            )
+        if policy.ionice is not None:
+            clear_menu.addAction(
+                "I/O Priority", lambda: self._do_clear_persistent(proc, "ionice_class")
+            )
+        if sum(value is not None for value in (
+            policy.affinity, policy.nice, policy.ionice
+        )) > 1:
             clear_menu.addSeparator()
             clear_menu.addAction(
-                "Clear All Matching Rules",
-                lambda: self._do_clear_rules(
-                    proc, [rule.rule_id for rule in matching_rules]
-                ),
+                "All", lambda: self._do_clear_persistent(proc, None)
             )
         menu.exec(self.viewport().mapToGlobal(pos))
 
@@ -630,32 +629,26 @@ class ProcessTable(QTableWidget):
         if name:
             self.probalance_include_requested.emit(name)
 
-    def _matching_rules(self, proc_name: str) -> list:
-        if self._rule_engine is None:
-            return []
-        return [
-            rule for rule in self._rule_engine.get_rules()
-            if rule.pattern_matches(proc_name)
-        ]
-
-    def _do_clear_rules(self, proc: ProcessPolicyView, rule_ids: list[str]):
+    def _do_clear_persistent(self, proc: ProcessPolicyView, policy: str | None):
         observed = proc.observed
-        rules = [
-            rule for rule in self._matching_rules(observed.name)
-            if rule.rule_id in rule_ids
-        ]
-        if not rules:
+        if self._rule_engine is None:
             return
-        names = "\n".join(f"• {rule.name or rule.pattern}" for rule in rules)
+        label = {
+            "affinity": "CPU affinity",
+            "nice": "CPU priority",
+            "ionice_class": "I/O priority",
+            None: "all Always settings",
+        }[policy]
         answer = QMessageBox.question(
             self,
-            "Clear Process Rules",
-            f"Remove {len(rules)} matching rule(s) for {observed.name}?\n\n{names}\n\n"
+            "Clear Always Settings",
+            f"Clear {label} for {observed.name}?\n\n"
             "The running process will not be reset or modified.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if answer == QMessageBox.StandardButton.Yes:
-            self.rule_remove_requested.emit([rule.rule_id for rule in rules])
+            if self._rule_engine.clear_persistent_policy(observed.name, policy):
+                self.persistent_policy_changed.emit()
 
     def _do_kill(self, proc: ProcessPolicyView, force: bool):
         import signal
@@ -703,7 +696,7 @@ class ProcessTable(QTableWidget):
             cpulist = dlg.get_cpulist()
             if utils.set_affinity(observed.pid, cpulist):
                 msg = f"Set affinity={cpulist} on {observed.name}({observed.pid})"
-                self.rule_value_manually_changed.emit(observed.pid)
+                self.policy_value_manually_changed.emit(observed.pid)
             else:
                 msg = f"Failed to set affinity on {observed.name}({observed.pid})"
             if self._log_callback:
@@ -726,7 +719,7 @@ class ProcessTable(QTableWidget):
             )
             if utils.set_nice(observed.pid, nice):
                 msg = f"Set {change} on {observed.name}({observed.pid})"
-                self.rule_value_manually_changed.emit(observed.pid)
+                self.policy_value_manually_changed.emit(observed.pid)
             else:
                 msg = f"Failed to set {change} on {observed.name}({observed.pid}) (root needed?)"
             if self._log_callback:
@@ -741,7 +734,7 @@ class ProcessTable(QTableWidget):
             lvl = dlg.get_ionice_level()
             if utils.set_ionice(observed.pid, cls, lvl):
                 msg = f"Set ionice class={cls} level={lvl} on {observed.name}({observed.pid})"
-                self.rule_value_manually_changed.emit(observed.pid)
+                self.policy_value_manually_changed.emit(observed.pid)
             else:
                 msg = f"Failed to set ionice on {observed.name}({observed.pid})"
             if self._log_callback:
@@ -756,38 +749,20 @@ class ProcessTable(QTableWidget):
         except (AttributeError, ValueError):
             return 2, 4
 
-    def _emit_always_rule(
+    def _save_always_policy(
         self, proc: ProcessPolicyView, label: str, **settings
     ):
-        """Create a Windows-style ``Always`` rule for an exact process name."""
-        from rules import Rule
-
+        """Persist one exact-name policy without exposing the rule model."""
+        if self._rule_engine is None:
+            return
         observed = proc.observed
-        rule_name = f"{observed.name} — {label}"
-        existing = None
-        if self._rule_engine is not None:
-            existing = next(
-                (
-                    rule for rule in self._rule_engine.get_rules()
-                    if rule.name == rule_name
-                    and rule.pattern == observed.name
-                    and rule.match_type == "exact"
-                ),
-                None,
-            )
-        rule = Rule(
-            name=rule_name,
-            pattern=observed.name,
-            match_type="exact",
-            enabled=existing.enabled if existing else True,
-            force_apply=existing.force_apply if existing else False,
-            **settings,
+        policy = next(iter(settings))
+        self._rule_engine.set_persistent_policy(
+            observed.name, policy, label, **settings
         )
-        if existing:
-            rule.rule_id = existing.rule_id
-        self.rule_add_requested.emit(rule)
+        self.persistent_policy_changed.emit()
 
-    def _do_add_affinity_rule(self, proc: ProcessPolicyView):
+    def _do_set_always_affinity(self, proc: ProcessPolicyView):
         observed = proc.observed
         aggregate = utils.get_aggregate_affinity_str(
             observed.pid, observed.affinity
@@ -800,46 +775,38 @@ class ProcessTable(QTableWidget):
             aggregate, self, observed.name, current_summary=summary
         )
         if dlg.exec() == AffinityDialog.DialogCode.Accepted:
-            self._emit_always_rule(
+            self._save_always_policy(
                 proc, "CPU Affinity", affinity=dlg.get_cpulist()
             )
 
-    def _do_add_priority_rule(self, proc: ProcessPolicyView):
-        from rules import Rule
+    def _do_set_always_priority(self, proc: ProcessPolicyView):
         observed = proc.observed
-        existing = None
-        if self._rule_engine is not None:
-            existing = next((
-                rule for rule in reversed(self._rule_engine.get_rules())
-                if rule.pattern == observed.name and rule.match_type == "exact"
-                and rule.nice is not None
-            ), None)
-        template = existing or Rule(
-            name=f"{observed.name} — CPU Priority", pattern=observed.name,
-            match_type="exact", nice=observed.nice,
+        priority = proc.effective_policy.nice
+        dlg = NicePriorityDialog(
+            observed.nice, self, observed.name,
+            initial_mode="offset" if isinstance(priority, OffsetNicePolicy) else "absolute",
+            initial_offset=priority.offset if isinstance(priority, OffsetNicePolicy) else 0,
+            initial_floor=priority.floor if isinstance(priority, OffsetNicePolicy) else -15,
+            initial_ceiling=priority.ceiling if isinstance(priority, OffsetNicePolicy) else 19,
         )
-        dlg = RuleEditDialog(rule=template, parent=self)
-        if dlg.exec() == RuleEditDialog.DialogCode.Accepted:
-            self.rule_add_requested.emit(dlg.get_rule())
+        if dlg.exec() == NicePriorityDialog.DialogCode.Accepted:
+            settings = {
+                "nice": dlg.get_nice() if dlg.get_mode() == "absolute" else 0,
+                "nice_mode": dlg.get_mode(),
+                "nice_offset": dlg.get_offset(),
+                "nice_floor": dlg.get_floor(),
+                "nice_ceiling": dlg.get_ceiling(),
+            }
+            self._save_always_policy(proc, "CPU Priority", **settings)
 
-    def _do_add_ionice_rule(self, proc: ProcessPolicyView):
+    def _do_set_always_ionice(self, proc: ProcessPolicyView):
         observed = proc.observed
         current_class, current_level = self._parse_ionice(observed.ionice)
         dlg = IoNiceDialog(current_class, current_level, self, observed.name)
         if dlg.exec() == IoNiceDialog.DialogCode.Accepted:
-            self._emit_always_rule(
+            self._save_always_policy(
                 proc,
                 "I/O Priority",
                 ionice_class=dlg.get_ionice_class(),
                 ionice_level=dlg.get_ionice_level(),
             )
-
-    def _do_add_rule(self, proc: ProcessPolicyView):
-        from rules import Rule
-        # Pre-populate with process name
-        name = proc.observed.name
-        template = Rule(name=name, pattern=name, match_type="contains")
-        dlg = RuleEditDialog(rule=template, parent=self)
-        if dlg.exec() == RuleEditDialog.DialogCode.Accepted:
-            rule = dlg.get_rule()
-            self.rule_add_requested.emit(rule)

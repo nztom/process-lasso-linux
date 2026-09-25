@@ -104,7 +104,7 @@ class GameModeDefaultTests(unittest.TestCase):
 class LaunchPolicyTests(unittest.TestCase):
     @mock.patch("game_mode.utils.set_nice", return_value=True)
     @mock.patch("game_mode.utils.set_affinity", return_value=True)
-    @mock.patch("game_mode.os.getpriority", return_value=7)
+    @mock.patch("game_mode.utils.get_thread_nice", return_value=7)
     def test_offset_composes_with_current_nice_and_is_bounded(self, _priority, affinity, nice):
         errors = game_mode.apply_launch_policy(42, {
             "affinity": "0-3", "nice": {"type": "offset", "offset": 20,

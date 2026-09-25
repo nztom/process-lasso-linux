@@ -4,20 +4,16 @@ A KDE/Linux process manager inspired by Windows Process Lasso. Built with Python
 
 ## Screenshots
 
-| Rules | ProBalance |
-|---|---|
-| ![Rules tab](screenshots/v2/rules.png) | ![ProBalance tab](screenshots/v2/probalance.png) |
-
-| Settings | Log |
-|---|---|
-| ![Settings tab](screenshots/v2/settings.png) | ![Log tab](screenshots/v2/log.png) |
+| ProBalance | Settings | Log |
+|---|---|---|
+| ![ProBalance tab](screenshots/v2/probalance.png) | ![Settings tab](screenshots/v2/settings.png) | ![Log tab](screenshots/v2/log.png) |
 
 ---
 
 ## Asymmetric CPU controls
 
 CPU topology and feature support are detected once when the app starts. Dynamic
-state—processes, threads, rules, ProBalance, GPU/CPU utilization, online CPUs,
+state—processes, threads, saved process policies, ProBalance, GPU/CPU utilization, online CPUs,
 and the current X3D scheduler mode—is updated at one global monitor interval.
 
 On supported asymmetric dual-CCD AMD X3D processors, Settings exposes the
@@ -48,7 +44,7 @@ launch options to avoid applying them twice. The default environment enables
 NVIDIA PRIME render offload for OpenGL and Vulkan games; edit or clear the
 assignments in the Game Mode tab when another GPU policy is desired. The Game
 Mode tab edits defaults, per-game overrides, aliases, and identity merges and
-shows live sessions. Explicit Rules remain field-by-field authoritative after launch;
+shows live sessions. Process-level Always settings remain authoritative after launch;
 ProBalance and the global default affinity do not alter active game sessions.
 
 Game Mode defaults to `cache (recommended)`. Select `Disabled` if Game Mode
@@ -70,20 +66,12 @@ Game Mode screen is shown.
 - **Temperature tint** — bars shift orange as core temps rise (reads from hwmon/k10temp/zenpower)
 - **Rolling CPU history chart** — 4-minute area graph above the bars, colour-coded by load
 - Filter bar (Ctrl+F) — live search by process name or PID
-- Right-click context menu: Set affinity, Set nice priority, Set I/O priority, Add rule, Kill / Force Kill
+- Right-click context menu: current/Always affinity and priority, clear Always settings, Kill / Force Kill
 - Multi-select with Shift/Ctrl+click; Delete key to kill selected processes
 - Column visibility toggle; cmdline tooltip on process name
 
-### Rules tab
-- Pin any process to specific CPU cores, permanently enforced across reboots
-- Match by **name contains**, **exact name**, or **regular expression**
+- Per-process Always affinity, CPU priority, and I/O priority are configured from the Processes tab and persist across restarts
 - **Visual CPU affinity picker** — topology-aware checkbox grid, no manual range typing required
-  - Quick-select buttons: **All**, **None**, **CCD0 (V-Cache)**, **CCD1**, **CCD0 (no SMT)**
-  - Pre-fills from a running process via "Select from running processes…"
-- Per-rule nice priority (−20 to 19) and I/O priority (class + level)
-- Enable/disable individual rules without deleting them
-- Export rules to JSON / Import from JSON
-- 14 built-in rule presets (Steam, Wine/Proton, OBS, Discord, browsers, compilers, etc.)
 
 ### ProBalance tab
 - Automatically throttles CPU-hogging background processes when system load spikes

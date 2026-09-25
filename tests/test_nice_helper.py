@@ -12,40 +12,38 @@ import nice_helper
 
 
 class NiceHelperTests(unittest.TestCase):
-    @mock.patch("nice_helper.os.getpriority", return_value=0)
-    @mock.patch("nice_helper.utils.get_process_tids", return_value=[1234, 1235])
+    @mock.patch("nice_helper.utils.get_thread_nice", return_value=0)
     @mock.patch("nice_helper.subprocess.run")
-    def test_sets_every_process_thread(self, run, get_tids, getpriority):
+    def test_sets_every_requested_thread(self, run, getpriority):
         run.return_value.returncode = 0
 
-        self.assertTrue(nice_helper.set_negative_nice(1234, -1))
+        self.assertEqual(
+            nice_helper.set_negative_nice_threads([1234, 1235], -1),
+            {1234, 1235},
+        )
 
         run.assert_called_once_with(
             ["sudo", nice_helper.HELPER, "renice-pids", "-1", "1234", "1235"],
             capture_output=True, text=True, timeout=10,
         )
 
-    @mock.patch("nice_helper.os.getpriority", return_value=-1)
-    @mock.patch("nice_helper.utils.get_process_tids", return_value=[1234, 1235])
+    @mock.patch("nice_helper.utils.get_thread_nice", return_value=-1)
     @mock.patch("nice_helper.subprocess.run")
-    def test_skips_threads_already_at_target(self, run, get_tids, getpriority):
-        self.assertTrue(nice_helper.set_negative_nice(1234, -1))
+    def test_skips_threads_already_at_target(self, run, getpriority):
+        self.assertEqual(
+            nice_helper.set_negative_nice_threads([1234, 1235], -1),
+            {1234, 1235},
+        )
         run.assert_not_called()
 
     @mock.patch("nice_helper.subprocess.run")
     def test_rejects_non_negative_nice(self, run):
-        self.assertFalse(nice_helper.set_negative_nice(1234, 0))
+        self.assertEqual(nice_helper.set_negative_nice_threads([1234], 0), set())
         run.assert_not_called()
 
     @mock.patch("nice_helper.subprocess.run")
-    def test_rejects_invalid_pid(self, run):
-        self.assertFalse(nice_helper.set_negative_nice(0, -1))
-        run.assert_not_called()
-
-    @mock.patch("nice_helper.utils.get_process_tids", return_value=[])
-    @mock.patch("nice_helper.subprocess.run")
-    def test_missing_process_fails_without_sudo(self, run, get_tids):
-        self.assertFalse(nice_helper.set_negative_nice(1234, -1))
+    def test_rejects_invalid_tid(self, run):
+        self.assertEqual(nice_helper.set_negative_nice_threads([0], -1), set())
         run.assert_not_called()
 
 
